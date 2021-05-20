@@ -36,57 +36,42 @@ int dvdread_getbits_init(getbits_state_t *state, uint8_t *start) {
   return 1;
 }
 
+static void dvdread_getbits_refill(getbits_state_t *state) {
+    ++state->byte_position;
+    state->byte = state->start[state->byte_position];
+    state->bit_position = 0;
+}
+
 /* Non-optimized getbits. */
 /* This can easily be optimized for particular platforms. */
 uint32_t dvdread_getbits(getbits_state_t *state, uint32_t number_of_bits) {
-  uint32_t result=0;
-  uint8_t byte=0;
+  uint8_t byte;
   if (number_of_bits > 32) {
     printf("Number of bits > 32 in getbits\n");
     abort();
   }
 
-  if ((state->bit_position) > 0) {  /* Last getbits left us in the middle of a byte. */
-    if (number_of_bits > (8-state->bit_position)) { /* this getbits will span 2 or more bytes. */
-      byte = state->byte;
-      byte = byte >> (state->bit_position);
-      result = byte;
-      number_of_bits -= (8-state->bit_position);
-      state->bit_position = 0;
-      state->byte_position++;
-      state->byte = state->start[state->byte_position];
-    } else {
-      byte=state->byte;
-      state->byte = state->byte << number_of_bits;
-      byte = byte >> (8 - number_of_bits);
-      result = byte;
-      state->bit_position += number_of_bits; /* Here it is impossible for bit_position > 8 */
-      if (state->bit_position == 8) {
-        state->bit_position = 0;
-        state->byte_position++;
-        state->byte = state->start[state->byte_position];
-      }
-      number_of_bits = 0;
-    }
+  if (state->bit_position == 8) {
+    dvdread_getbits_refill(state);
   }
-  if ((state->bit_position) == 0) {
-    while (number_of_bits > 7) {
-      result = (result << 8) + state->byte;
-      state->byte_position++;
-      state->byte = state->start[state->byte_position];
-      number_of_bits -= 8;
-    }
-    if (number_of_bits > 0) { /* number_of_bits < 8 */
-      byte = state->byte;
-      state->byte = state->byte << number_of_bits;
-      state->bit_position += number_of_bits; /* Here it is impossible for bit_position > 7 */
-      byte = byte >> (8 - number_of_bits);
-      result = (result << number_of_bits) + byte;
-      number_of_bits = 0;
-    }
+  uint8_t current_bits_available = 8 - state->bit_position;
+  uint8_t bits_to_read = number_of_bits > current_bits_available ? current_bits_available : number_of_bits;
+  byte = state->byte;
+  byte <<= state->bit_position;
+  /* Read at most a byte on the currently loaded byte. If we need more, we'll
+   * read more later on */
+  byte >>= 8 - bits_to_read;
+  state->bit_position += number_of_bits;
+  /* If we had enough bytes to read, just return those */
+  if (number_of_bits <= current_bits_available) {
+    return byte;
   }
-
-  return result;
+  /* If we don't have enough bits, fetch the next byte */
+  /* Fixme: we should be able to verify that we do not overread */
+  dvdread_getbits_refill(state);
+  uint32_t remaining_bits = number_of_bits - current_bits_available;
+  return ((uint32_t)byte << (remaining_bits)) |
+          dvdread_getbits(state, remaining_bits);
 }
 
 #if 0  /* TODO: optimized versions not yet used */
