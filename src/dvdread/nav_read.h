@@ -38,7 +38,7 @@ extern "C" {
  * @param buffer Pointer to the buffer of the on disc PCI data.
  * @param size Buffer size
  */
-void navRead_PCI(pci_t *, unsigned char *, size_t);
+void navRead_PCI(pci_t *, unsigned char *, size_t size);
 
 /**
  * Reads the DSI packet data pointed to into dsi struct.
@@ -47,7 +47,7 @@ void navRead_PCI(pci_t *, unsigned char *, size_t);
  * @param buffer Pointer to the buffer of the on disc DSI data.
  * @param size Buffer size
  */
-void navRead_DSI(dsi_t *, unsigned char *, size_t);
+void navRead_DSI(dsi_t *, unsigned char *, size_t size);
 
 #ifdef __cplusplus
 };

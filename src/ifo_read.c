@@ -230,7 +230,7 @@ static void ReadBufTime(buf_reader *b, dvd_time_t *time)
 static void read_video_attr(buf_reader *b, video_attr_t *va) {
   getbits_state_t state;
 
-  dvdread_getbits_init(&state, b->rbuf);
+  dvdread_getbits_init(&state, b->rbuf, b->buflen);
   va->mpeg_version = dvdread_getbits(&state, 2);
   va->video_format = dvdread_getbits(&state, 2);
   va->display_aspect_ratio = dvdread_getbits(&state, 2);
@@ -248,7 +248,7 @@ static void read_video_attr(buf_reader *b, video_attr_t *va) {
 static void read_audio_attr(buf_reader *b, audio_attr_t *aa) {
   getbits_state_t state;
 
-  dvdread_getbits_init(&state, b->rbuf);
+  dvdread_getbits_init(&state, b->rbuf, b->buflen);
   aa->audio_format = dvdread_getbits(&state, 3);
   aa->multichannel_extension = dvdread_getbits(&state, 1);
   aa->lang_type = dvdread_getbits(&state, 2);
@@ -273,7 +273,7 @@ static void read_multichannel_ext(buf_reader *b, struct ifo_handle_private_s *if
                                   multichannel_ext_t *me) {
   getbits_state_t state;
 
-  dvdread_getbits_init(&state, b->rbuf);
+  dvdread_getbits_init(&state, b->rbuf, b->buflen);
   me->zero1 = dvdread_getbits(&state, 7);
   me->ach0_gme = dvdread_getbits(&state, 1);
   me->zero2 = dvdread_getbits(&state, 7);
@@ -300,7 +300,7 @@ static void read_multichannel_ext(buf_reader *b, struct ifo_handle_private_s *if
 static void read_subp_attr(buf_reader *b, subp_attr_t *sa) {
   getbits_state_t state;
 
-  dvdread_getbits_init(&state, b->rbuf);
+  dvdread_getbits_init(&state, b->rbuf, b->buflen);
   sa->code_mode = dvdread_getbits(&state, 3);
   sa->zero1 = dvdread_getbits(&state, 3);
   sa->type = dvdread_getbits(&state, 2);
@@ -314,7 +314,7 @@ static void read_subp_attr(buf_reader *b, subp_attr_t *sa) {
 static void read_user_ops(buf_reader *b, user_ops_t *uo) {
   getbits_state_t state;
 
-  dvdread_getbits_init(&state, b->rbuf);
+  dvdread_getbits_init(&state, b->rbuf, b->buflen);
   uo->zero                           = dvdread_getbits(&state, 7);
   uo->video_pres_mode_change         = dvdread_getbits(&state, 1);
   uo->karaoke_audio_pres_mode_change = dvdread_getbits(&state, 1);
@@ -347,7 +347,7 @@ static void read_user_ops(buf_reader *b, user_ops_t *uo) {
 static void read_pgci_srp(buf_reader *b, pgci_srp_t *ps) {
   getbits_state_t state;
 
-  dvdread_getbits_init(&state, b->rbuf);
+  dvdread_getbits_init(&state, b->rbuf, b->buflen);
   ps->entry_id                       = dvdread_getbits(&state, 8);
   ps->block_mode                     = dvdread_getbits(&state, 2);
   ps->block_type                     = dvdread_getbits(&state, 2);
@@ -360,7 +360,7 @@ static void read_pgci_srp(buf_reader *b, pgci_srp_t *ps) {
 static void read_cell_playback(buf_reader *b, cell_playback_t *cp) {
   getbits_state_t state;
 
-  dvdread_getbits_init(&state, b->rbuf);
+  dvdread_getbits_init(&state, b->rbuf, b->buflen);
   cp->block_mode                      = dvdread_getbits(&state, 2);
   cp->block_type                      = dvdread_getbits(&state, 2);
   cp->seamless_play                   = dvdread_getbits(&state, 1);
@@ -389,7 +389,7 @@ static void read_cell_playback(buf_reader *b, cell_playback_t *cp) {
 static void read_playback_type(buf_reader *b, playback_type_t *pt) {
   getbits_state_t state;
 
-  dvdread_getbits_init(&state, b->rbuf);
+  dvdread_getbits_init(&state, b->rbuf, b->buflen);
   pt->zero_1                          = dvdread_getbits(&state, 1);
   pt->multi_or_random_pgc_title       = dvdread_getbits(&state, 1);
   pt->jlc_exists_in_cell_cmd          = dvdread_getbits(&state, 1);
