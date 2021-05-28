@@ -41,7 +41,7 @@
                 __FILE__, __LINE__, # arg );\
   }
 
-void navRead_PCI(pci_t *pci, unsigned char *buffer) {
+void navRead_PCI(pci_t *pci, unsigned char *buffer, size_t size) {
   int32_t i, j;
   getbits_state_t state;
   if (!getbits_init(&state, buffer)) abort(); /* Passed NULL pointers */
@@ -208,7 +208,7 @@ void navRead_PCI(pci_t *pci, unsigned char *buffer) {
 #endif /* !NDEBUG */
 }
 
-void navRead_DSI(dsi_t *dsi, unsigned char *buffer) {
+void navRead_DSI(dsi_t *dsi, unsigned char *buffer, size_t size) {
   int i;
   getbits_state_t state;
   if (!getbits_init(&state, buffer)) abort(); /* Passed NULL pointers */
