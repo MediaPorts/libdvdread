@@ -27,12 +27,13 @@
 
 #include "dvdread/bitreader.h"
 
-int dvdread_getbits_init(getbits_state_t *state, uint8_t *start) {
+int dvdread_getbits_init(getbits_state_t *state, uint8_t *start, size_t size) {
   if ((state == NULL) || (start == NULL)) return 0;
   state->start = start;
   state->bit_position = 0;
   state->byte_position = 0;
   state->byte = start[0];
+  state->size = size;
   return 1;
 }
 
@@ -52,6 +53,8 @@ uint32_t dvdread_getbits(getbits_state_t *state, uint32_t number_of_bits) {
   }
 
   if (state->bit_position == 8) {
+    if (state->byte_position >= state->size - 1)
+        return 0;
     dvdread_getbits_refill(state);
   }
   uint8_t current_bits_available = 8 - state->bit_position;
@@ -67,7 +70,8 @@ uint32_t dvdread_getbits(getbits_state_t *state, uint32_t number_of_bits) {
     return byte;
   }
   /* If we don't have enough bits, fetch the next byte */
-  /* Fixme: we should be able to verify that we do not overread */
+  if (state->byte_position >= state->size - 1)
+      return 0;
   dvdread_getbits_refill(state);
   uint32_t remaining_bits = number_of_bits - current_bits_available;
   return ((uint32_t)byte << (remaining_bits)) |
@@ -111,7 +115,7 @@ int main()
         // 0b 01101110 11000010
     };
     getbits_state_t state;
-    dvdread_getbits_init(&state, buff);
+    dvdread_getbits_init(&state, buff, sizeof(buff));
 
     uint32_t bits = dvdread_getbits(&state, 3);
     assert(bits == 3);
@@ -125,24 +129,24 @@ int main()
     bits = dvdread_getbits(&state, 6);
     assert(bits == 2);
 
-    dvdread_getbits_init(&state, buff);
+    dvdread_getbits_init(&state, buff, sizeof(buff));
     bits = dvdread_getbits(&state, 10);
     assert(bits == 443);
 
     bits = dvdread_getbits(&state, 6);
     assert(bits == 2);
 
-    dvdread_getbits_init(&state, buff);
+    dvdread_getbits_init(&state, buff, sizeof(buff));
     bits = dvdread_getbits(&state, 16);
     assert(bits == 28354);
 
     buff[0] = buff[1] = 0xFF;
-    dvdread_getbits_init(&state, buff);
+    dvdread_getbits_init(&state, buff, sizeof(buff));
     bits = dvdread_getbits(&state, 16);
     assert(bits == 0xFFFF);
 
     uint8_t large[5] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
-    dvdread_getbits_init(&state, large);
+    dvdread_getbits_init(&state, large, sizeof(large));
     bits = dvdread_getbits(&state, 8);
     assert(bits == 0xFF);
     bits = dvdread_getbits(&state, 32);
