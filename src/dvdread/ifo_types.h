@@ -25,30 +25,6 @@
 #include <inttypes.h>
 #include "dvdread/dvd_reader.h"
 
-
-#undef ATTRIBUTE_PACKED
-
-#if defined(__GNUC__)
-# if __GNUC__ > 2 || (__GNUC__ == 2 && __GNUC_MINOR__ >= 95)
-#  if (__GNUC__ > 3 || (__GNUC__ == 3 && __GNUC_MINOR__ >= 4)) && !defined(__clang__)
-#   define ATTRIBUTE_PACKED __attribute__ ((packed,gcc_struct))
-#  else
-#   define ATTRIBUTE_PACKED __attribute__ ((packed))
-#  endif
-#  define PRAGMA_PACK 0
-# endif
-#endif
-
-#if !defined(ATTRIBUTE_PACKED)
-#define ATTRIBUTE_PACKED
-#define PRAGMA_PACK 1
-#endif
-
-#if PRAGMA_PACK
-#pragma pack(1)
-#endif
-
-
 /**
  * Common
  *
@@ -730,10 +706,6 @@ typedef struct {
 } vts_tmapt_t;
 #define VTS_TMAPT_SIZE 8U
 
-
-#if PRAGMA_PACK
-#pragma pack()
-#endif
 
 
 /**

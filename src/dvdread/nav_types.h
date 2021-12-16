@@ -241,8 +241,4 @@ typedef struct {
 } dsi_t;
 
 
-#if PRAGMA_PACK
-#pragma pack()
-#endif
-
 #endif /* LIBDVDREAD_NAV_TYPES_H */
