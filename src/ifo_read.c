@@ -1008,30 +1008,39 @@ static int ifoRead_CELL_POSITION_TBL(ifo_handle_t *ifofile,
 static int ifoRead_PGC(ifo_handle_t *ifofile, pgc_t *pgc, unsigned int offset) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   unsigned int i;
+  char buf[PGC_SIZE];
+  buf_reader b;
 
   if(!DVDFileSeek_(ifop->file, offset))
     return 0;
 
-  if(!(DVDReadBytes(ifop->file, pgc, PGC_SIZE)))
+  b.wbuf = buf;
+  b.buflen = PGC_SIZE;
+
+  if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen)))
     return 0;
 
-  read_user_ops(&pgc->prohibited_ops);
-  B2N_16(pgc->next_pgc_nr);
-  B2N_16(pgc->prev_pgc_nr);
-  B2N_16(pgc->goup_pgc_nr);
-  B2N_16(pgc->command_tbl_offset);
-  B2N_16(pgc->program_map_offset);
-  B2N_16(pgc->cell_playback_offset);
-  B2N_16(pgc->cell_position_offset);
-
+  SkipZeroBuf(&b, 2);
+  ReadBuf8(&b, &pgc->nr_of_programs);
+  ReadBuf8(&b, &pgc->nr_of_cells);
+  ReadBufTime(&b, &pgc->playback_time);
+  read_user_ops_(&b, &pgc->prohibited_ops);
   for(i = 0; i < 8; i++)
-    B2N_16(pgc->audio_control[i]);
+    ReadBuf16(&b, &pgc->audio_control[i]);
   for(i = 0; i < 32; i++)
-    B2N_32(pgc->subp_control[i]);
+    ReadBuf32(&b, &pgc->subp_control[i]);
+  ReadBuf16(&b, &pgc->next_pgc_nr);
+  ReadBuf16(&b, &pgc->prev_pgc_nr);
+  ReadBuf16(&b, &pgc->goup_pgc_nr);
+  ReadBuf8(&b, &pgc->pg_playback_mode);
+  ReadBuf8(&b, &pgc->still_time);
   for(i = 0; i < 16; i++)
-    B2N_32(pgc->palette[i]);
+    ReadBuf32(&b, &pgc->palette[i]);
+  ReadBuf16(&b, &pgc->command_tbl_offset);
+  ReadBuf16(&b, &pgc->program_map_offset);
+  ReadBuf16(&b, &pgc->cell_playback_offset);
+  ReadBuf16(&b, &pgc->cell_position_offset);
 
-  CHECK_ZERO(pgc->zero_1);
   CHECK_VALUE(pgc->nr_of_programs <= pgc->nr_of_cells);
 
   /* verify time (look at print_time) */
