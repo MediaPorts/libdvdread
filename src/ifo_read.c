@@ -1510,9 +1510,6 @@ int ifoRead_VTS_TMAPT(ifo_handle_t *ifofile) {
     B2N_32(vts_tmap_srp[i]);
   }
 
-
-  info_length = vts_tmapt->nr_of_tmaps * sizeof(vts_tmap_t);
-
   vts_tmapt->tmap = calloc(1, vts_tmapt->nr_of_tmaps * sizeof(vts_tmap_t));
   if(!vts_tmapt->tmap) {
     free(vts_tmap_srp);
