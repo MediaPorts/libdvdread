@@ -2416,31 +2416,42 @@ static int ifoRead_VTS_ATTRIBUTES(ifo_handle_t *ifofile,
                                   unsigned int offset) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   unsigned int i;
+  char buf[VTS_ATTRIBUTES_SIZE];
+  buf_reader b;
 
   if(!DVDFileSeek_(ifop->file, offset))
     return 0;
 
-  if(!(DVDReadBytes(ifop->file, vts_attributes, VTS_ATTRIBUTES_SIZE)))
+  b.wbuf = buf;
+  b.buflen = VTS_ATTRIBUTES_SIZE;
+
+  if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen)))
     return 0;
 
-  read_video_attr(&vts_attributes->vtsm_vobs_attr);
-  read_video_attr(&vts_attributes->vtstt_vobs_video_attr);
-  read_audio_attr(&vts_attributes->vtsm_audio_attr);
+  ReadBuf32(&b, &vts_attributes->last_byte);
+  ReadBuf32(&b, &vts_attributes->vts_cat);
+  read_video_attr_(&b, &vts_attributes->vtsm_vobs_attr);
+  SkipZeroBuf(&b, 1);
+  ReadBuf8(&b, &vts_attributes->nr_of_vtsm_audio_streams);
+  read_audio_attr_(&b, &vts_attributes->vtsm_audio_attr);
+  SkipZeroBuf(&b, AUDIO_ATTR_SIZE * 7);
+  SkipZeroBuf(&b, 16);
+  SkipZeroBuf(&b, 1);
+  ReadBuf8(&b, &vts_attributes->nr_of_vtsm_subp_streams);
+  read_subp_attr_(&b, &vts_attributes->vtsm_subp_attr);
+  SkipZeroBuf(&b, SUBP_ATTR_SIZE * 27);
+  SkipZeroBuf(&b, 2);
+  read_video_attr_(&b, &vts_attributes->vtstt_vobs_video_attr);
+  SkipZeroBuf(&b, 1);
+  ReadBuf8(&b, &vts_attributes->nr_of_vtstt_audio_streams);
   for(i=0; i<8; i++)
-    read_audio_attr(&vts_attributes->vtstt_audio_attr[i]);
-  read_subp_attr(&vts_attributes->vtsm_subp_attr);
+    read_audio_attr_(&b, &vts_attributes->vtstt_audio_attr[i]);
+  SkipZeroBuf(&b, 16);
+  SkipZeroBuf(&b, 1);
+  ReadBuf8(&b, &vts_attributes->nr_of_vtstt_subp_streams);
   for(i=0; i<32; i++)
-    read_subp_attr(&vts_attributes->vtstt_subp_attr[i]);
-  B2N_32(vts_attributes->last_byte);
-  B2N_32(vts_attributes->vts_cat);
+    read_subp_attr_(&b, &vts_attributes->vtstt_subp_attr[i]);
 
-  CHECK_ZERO(vts_attributes->zero_1);
-  CHECK_ZERO(vts_attributes->zero_2);
-  CHECK_ZERO(vts_attributes->zero_3);
-  CHECK_ZERO(vts_attributes->zero_4);
-  CHECK_ZERO(vts_attributes->zero_5);
-  CHECK_ZERO(vts_attributes->zero_6);
-  CHECK_ZERO(vts_attributes->zero_7);
   CHECK_VALUE(vts_attributes->nr_of_vtsm_audio_streams <= 1);
   CHECK_VALUE(vts_attributes->nr_of_vtsm_subp_streams <= 1);
   CHECK_VALUE(vts_attributes->nr_of_vtstt_audio_streams <= 8);
