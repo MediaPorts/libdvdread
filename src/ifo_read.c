@@ -1521,6 +1521,8 @@ int ifoRead_PTL_MAIT(ifo_handle_t *ifofile) {
   ptl_mait_t *ptl_mait;
   int info_length;
   unsigned int i, j;
+  char buf[PTL_MAIT_SIZE];
+  buf_reader b;
 
   if(!ifofile)
     return 0;
@@ -1540,15 +1542,18 @@ int ifoRead_PTL_MAIT(ifo_handle_t *ifofile) {
 
   ifofile->ptl_mait = ptl_mait;
 
-  if(!(DVDReadBytes(ifop->file, ptl_mait, PTL_MAIT_SIZE))) {
+  b.wbuf = buf;
+  b.buflen = PTL_MAIT_SIZE;
+
+  if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen))) {
     free(ptl_mait);
     ifofile->ptl_mait = NULL;
     return 0;
   }
 
-  B2N_16(ptl_mait->nr_of_countries);
-  B2N_16(ptl_mait->nr_of_vtss);
-  B2N_32(ptl_mait->last_byte);
+  ReadBuf16(&b, &ptl_mait->nr_of_countries);
+  ReadBuf16(&b, &ptl_mait->nr_of_vtss);
+  ReadBuf32(&b, &ptl_mait->last_byte);
 
   CHECK_VALUE(ptl_mait->nr_of_countries != 0);
   CHECK_VALUE(ptl_mait->nr_of_countries < 100); /* ?? */
@@ -1569,23 +1574,26 @@ int ifoRead_PTL_MAIT(ifo_handle_t *ifofile) {
   }
 
   for(i = 0; i < ptl_mait->nr_of_countries; i++) {
-    if(!(DVDReadBytes(ifop->file, &ptl_mait->countries[i], PTL_MAIT_COUNTRY_SIZE))) {
+    char bufcountry[PTL_MAIT_COUNTRY_SIZE];
+
+    b.wbuf = bufcountry;
+    b.buflen = PTL_MAIT_COUNTRY_SIZE;
+
+    if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen))) {
       Log0(ifop->ctx, "Unable to read PTL_MAIT.");
       free(ptl_mait->countries);
       free(ptl_mait);
       ifofile->ptl_mait = NULL;
       return 0;
     }
+
+    ReadBuf16(&b, &ptl_mait->countries[i].country_code);
+    SkipZeroBuf(&b, 2);
+    ReadBuf16(&b, &ptl_mait->countries[i].pf_ptl_mai_start_byte);
+    SkipZeroBuf(&b, 2);
   }
 
   for(i = 0; i < ptl_mait->nr_of_countries; i++) {
-    B2N_16(ptl_mait->countries[i].country_code);
-    B2N_16(ptl_mait->countries[i].pf_ptl_mai_start_byte);
-  }
-
-  for(i = 0; i < ptl_mait->nr_of_countries; i++) {
-    CHECK_ZERO(ptl_mait->countries[i].zero_1);
-    CHECK_ZERO(ptl_mait->countries[i].zero_2);
     CHECK_VALUE(ptl_mait->countries[i].pf_ptl_mai_start_byte
                 + sizeof(pf_level_t) * (ptl_mait->nr_of_vtss + 1) <= ptl_mait->last_byte + 1);
   }
@@ -1609,7 +1617,11 @@ int ifoRead_PTL_MAIT(ifo_handle_t *ifofile) {
       ifofile->ptl_mait = NULL;
       return 0;
     }
-    if(!(DVDReadBytes(ifop->file, pf_temp, info_length))) {
+
+    b.wbuf = pf_temp;
+    b.buflen = info_length;
+
+    if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen))) {
       Log0(ifop->ctx, "Unable to read PTL_MAIT table at index %d.",i);
       free(pf_temp);
       free_ptl_mait(ptl_mait, i);
