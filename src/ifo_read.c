@@ -2181,7 +2181,9 @@ int ifoRead_PGCI_UT(ifo_handle_t *ifofile) {
   unsigned int sector;
   unsigned int i;
   int info_length;
-  uint8_t *data, *ptr;
+  char *data;
+  char buf[PGCI_UT_SIZE];
+  buf_reader b;
 
   if(!ifofile)
     return 0;
@@ -2208,7 +2210,10 @@ int ifoRead_PGCI_UT(ifo_handle_t *ifofile) {
     return 0;
   }
 
-  if(!(DVDReadBytes(ifop->file, ifofile->pgci_ut, PGCI_UT_SIZE))) {
+  b.wbuf = buf;
+  b.buflen = PGCI_UT_SIZE;
+
+  if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen))) {
     free(ifofile->pgci_ut);
     ifofile->pgci_ut = NULL;
     return 0;
@@ -2216,10 +2221,10 @@ int ifoRead_PGCI_UT(ifo_handle_t *ifofile) {
 
   pgci_ut = ifofile->pgci_ut;
 
-  B2N_16(pgci_ut->nr_of_lus);
-  B2N_32(pgci_ut->last_byte);
+  ReadBuf16(&b, &pgci_ut->nr_of_lus);
+  SkipZeroBuf(&b, 2);
+  ReadBuf32(&b, &pgci_ut->last_byte);
 
-  CHECK_ZERO(pgci_ut->zero_1);
   CHECK_VALUE(pgci_ut->nr_of_lus != 0);
   CHECK_VALUE(pgci_ut->nr_of_lus < 100); /* ?? 3-4 ? */
   CHECK_VALUE((uint32_t)pgci_ut->nr_of_lus * PGCI_LU_SIZE < pgci_ut->last_byte);
@@ -2231,7 +2236,11 @@ int ifoRead_PGCI_UT(ifo_handle_t *ifofile) {
     ifofile->pgci_ut = NULL;
     return 0;
   }
-  if(!(DVDReadBytes(ifop->file, data, info_length))) {
+
+  b.wbuf = data;
+  b.buflen = info_length;
+
+  if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen))) {
     free(data);
     free(pgci_ut);
     ifofile->pgci_ut = NULL;
@@ -2245,12 +2254,11 @@ int ifoRead_PGCI_UT(ifo_handle_t *ifofile) {
     ifofile->pgci_ut = NULL;
     return 0;
   }
-  ptr = data;
   for(i = 0; i < pgci_ut->nr_of_lus; i++) {
-    memcpy(&pgci_ut->lu[i], ptr, PGCI_LU_SIZE);
-    ptr += PGCI_LU_SIZE;
-    B2N_16(pgci_ut->lu[i].lang_code);
-    B2N_32(pgci_ut->lu[i].lang_start_byte);
+    ReadBuf16(&b, &pgci_ut->lu[i].lang_code);
+    ReadBuf8(&b, &pgci_ut->lu[i].lang_extension);
+    ReadBuf8(&b, &pgci_ut->lu[i].exists);
+    ReadBuf32(&b, &pgci_ut->lu[i].lang_start_byte);
   }
   free(data);
 
