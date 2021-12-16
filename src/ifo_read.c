@@ -639,6 +639,8 @@ void ifoClose(ifo_handle_t *ifofile) {
 static int ifoRead_VMG(ifo_handle_t *ifofile) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   vmgi_mat_t *vmgi_mat;
+  char buf[VMGI_MAT_SIZE];
+  buf_reader b;
 
   vmgi_mat = calloc(1, sizeof(vmgi_mat_t));
   if(!vmgi_mat)
@@ -652,52 +654,61 @@ static int ifoRead_VMG(ifo_handle_t *ifofile) {
     return 0;
   }
 
-  if(!DVDReadBytes(ifop->file, vmgi_mat, VMGI_MAT_SIZE)) {
+  b.wbuf = buf;
+  b.buflen = VMGI_MAT_SIZE;
+
+  if(!DVDReadBytes(ifop->file, b.wbuf, b.buflen)) {
     free(ifofile->vmgi_mat);
     ifofile->vmgi_mat = NULL;
     return 0;
   }
 
+  ReadBufData(&b, vmgi_mat->vmg_identifier, 12);
   if(strncmp("DVDVIDEO-VMG", vmgi_mat->vmg_identifier, 12) != 0) {
     free(ifofile->vmgi_mat);
     ifofile->vmgi_mat = NULL;
     return 0;
   }
 
-  B2N_32(vmgi_mat->vmg_last_sector);
-  B2N_32(vmgi_mat->vmgi_last_sector);
-  B2N_32(vmgi_mat->vmg_category);
-  B2N_16(vmgi_mat->vmg_nr_of_volumes);
-  B2N_16(vmgi_mat->vmg_this_volume_nr);
-  B2N_16(vmgi_mat->vmg_nr_of_title_sets);
-  B2N_64(vmgi_mat->vmg_pos_code);
-  B2N_32(vmgi_mat->vmgi_last_byte);
-  B2N_32(vmgi_mat->first_play_pgc);
-  B2N_32(vmgi_mat->vmgm_vobs);
-  B2N_32(vmgi_mat->tt_srpt);
-  B2N_32(vmgi_mat->vmgm_pgci_ut);
-  B2N_32(vmgi_mat->ptl_mait);
-  B2N_32(vmgi_mat->vts_atrt);
-  B2N_32(vmgi_mat->txtdt_mgi);
-  B2N_32(vmgi_mat->vmgm_c_adt);
-  B2N_32(vmgi_mat->vmgm_vobu_admap);
-  read_video_attr(&vmgi_mat->vmgm_video_attr);
-  read_audio_attr(&vmgi_mat->vmgm_audio_attr);
-  read_subp_attr(&vmgi_mat->vmgm_subp_attr);
-
-
-  CHECK_ZERO(vmgi_mat->zero_1);
-  CHECK_ZERO(vmgi_mat->zero_2);
+  ReadBuf32(&b, &vmgi_mat->vmg_last_sector);
+  SkipZeroBuf(&b, 12);
+  ReadBuf32(&b, &vmgi_mat->vmgi_last_sector);
+  SkipZeroBuf(&b, 1);
+  ReadBuf8(&b, &vmgi_mat->specification_version);
+  ReadBuf32(&b, &vmgi_mat->vmg_category);
+  ReadBuf16(&b, &vmgi_mat->vmg_nr_of_volumes);
+  ReadBuf16(&b, &vmgi_mat->vmg_this_volume_nr);
+  ReadBuf8(&b, &vmgi_mat->disc_side);
   /* DVDs created by VDR-to-DVD device LG RC590M violate the following check with
    * vmgi_mat->zero_3 = 0x00000000010000000000000000000000000000. */
-  CHECK_ZERO(vmgi_mat->zero_3);
-  CHECK_ZERO(vmgi_mat->zero_4);
-  CHECK_ZERO(vmgi_mat->zero_5);
-  CHECK_ZERO(vmgi_mat->zero_6);
-  CHECK_ZERO(vmgi_mat->zero_7);
-  CHECK_ZERO(vmgi_mat->zero_8);
-  CHECK_ZERO(vmgi_mat->zero_9);
-  CHECK_ZERO(vmgi_mat->zero_10);
+  SkipZeroBuf(&b, 19);
+  ReadBuf16(&b, &vmgi_mat->vmg_nr_of_title_sets);
+  ReadBufData(&b, vmgi_mat->provider_identifier, 32);
+  ReadBuf64(&b, &vmgi_mat->vmg_pos_code);
+  SkipZeroBuf(&b, 24);
+  ReadBuf32(&b, &vmgi_mat->vmgi_last_byte);
+  ReadBuf32(&b, &vmgi_mat->first_play_pgc);
+  SkipZeroBuf(&b, 56);
+  ReadBuf32(&b, &vmgi_mat->vmgm_vobs);
+  ReadBuf32(&b, &vmgi_mat->tt_srpt);
+  ReadBuf32(&b, &vmgi_mat->vmgm_pgci_ut);
+  ReadBuf32(&b, &vmgi_mat->ptl_mait);
+  ReadBuf32(&b, &vmgi_mat->vts_atrt);
+  ReadBuf32(&b, &vmgi_mat->txtdt_mgi);
+  ReadBuf32(&b, &vmgi_mat->vmgm_c_adt);
+  ReadBuf32(&b, &vmgi_mat->vmgm_vobu_admap);
+  SkipZeroBuf(&b, 32);
+  read_video_attr_(&b, &vmgi_mat->vmgm_video_attr);
+  SkipZeroBuf(&b, 1);
+  ReadBuf8(&b, &vmgi_mat->nr_of_vmgm_audio_streams);
+  read_audio_attr_(&b, &vmgi_mat->vmgm_audio_attr);
+  SkipZeroBuf(&b, AUDIO_ATTR_SIZE * 7);
+  SkipZeroBuf(&b, 17);
+  ReadBuf8(&b, &vmgi_mat->nr_of_vmgm_subp_streams);
+  read_subp_attr_(&b, &vmgi_mat->vmgm_subp_attr);
+  SkipZeroBuf(&b, SUBP_ATTR_SIZE * 27);
+
+
   CHECK_VALUE(vmgi_mat->vmg_last_sector != 0);
   CHECK_VALUE(vmgi_mat->vmgi_last_sector != 0);
   CHECK_VALUE(vmgi_mat->vmgi_last_sector * 2 <= vmgi_mat->vmg_last_sector);
