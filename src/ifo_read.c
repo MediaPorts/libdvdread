@@ -981,11 +981,16 @@ static int ifoRead_PGC_PROGRAM_MAP(ifo_handle_t *ifofile,
                                    unsigned int nr, unsigned int offset) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   unsigned int size = nr * sizeof(pgc_program_map_t);
+  buf_reader b;
 
   if(!DVDFileSeek_(ifop->file, offset))
     return 0;
 
-  if(!(DVDReadBytes(ifop->file, program_map, size)))
+//   static_assert(sizeof(pgc_program_map_t)==1,"odd uint8_t size");
+  b.wbuf = (char*)program_map;
+  b.buflen = size;
+
+  if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen)))
     return 0;
 
   return 1;
@@ -996,16 +1001,20 @@ static int ifoRead_CELL_PLAYBACK_TBL(ifo_handle_t *ifofile,
                                      unsigned int nr, unsigned int offset) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   unsigned int i;
-  unsigned int size = nr * CELL_PLAYBACK_SIZE;
+  char buf[nr * CELL_PLAYBACK_SIZE];
+  buf_reader b;
 
   if(!DVDFileSeek_(ifop->file, offset))
     return 0;
 
-  if(!(DVDReadBytes(ifop->file, cell_playback, size)))
+  b.wbuf = buf;
+  b.buflen = nr * CELL_PLAYBACK_SIZE;
+
+  if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen)))
     return 0;
 
   for(i = 0; i < nr; i++) {
-    read_cell_playback(&cell_playback[i]);
+    read_cell_playback_(&b, &cell_playback[i]);
     /* Changed < to <= because this was false in the movie 'Pi'. */
     CHECK_VALUE(cell_playback[i].last_vobu_start_sector <=
                 cell_playback[i].last_sector);
