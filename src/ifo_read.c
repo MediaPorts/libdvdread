@@ -1210,6 +1210,8 @@ int ifoRead_TT_SRPT(ifo_handle_t *ifofile) {
   tt_srpt_t *tt_srpt;
   unsigned int i;
   size_t info_length;
+  char buf[TT_SRPT_SIZE];
+  buf_reader b;
 
   if(!ifofile)
     return 0;
@@ -1229,14 +1231,18 @@ int ifoRead_TT_SRPT(ifo_handle_t *ifofile) {
 
   ifofile->tt_srpt = tt_srpt;
 
-  if(!(DVDReadBytes(ifop->file, tt_srpt, TT_SRPT_SIZE))) {
+  b.wbuf = buf;
+  b.buflen = TT_SRPT_SIZE;
+
+  if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen))) {
     Log0(ifop->ctx, "Unable to read read TT_SRPT.");
     free(tt_srpt);
     return 0;
   }
 
-  B2N_16(tt_srpt->nr_of_srpts);
-  B2N_32(tt_srpt->last_byte);
+  ReadBuf16(&b, &tt_srpt->nr_of_srpts);
+  SkipZeroBuf(&b, 2);
+  ReadBuf32(&b, &tt_srpt->last_byte);
 
   /* E-One releases don't fill this field */
   if(tt_srpt->last_byte == 0) {
@@ -1244,13 +1250,18 @@ int ifoRead_TT_SRPT(ifo_handle_t *ifofile) {
   }
   info_length = tt_srpt->last_byte + 1 - TT_SRPT_SIZE;
 
-  tt_srpt->title = calloc(1, tt_srpt->nr_of_srpts * sizeof(*tt_srpt->title));
+  tt_srpt->title = calloc(tt_srpt->nr_of_srpts, sizeof(*tt_srpt->title));
   if(!tt_srpt->title) {
     free(tt_srpt);
     ifofile->tt_srpt = NULL;
     return 0;
   }
-  if(!(DVDReadBytes(ifop->file, tt_srpt->title, info_length))) {
+
+  char titleBuf[info_length];
+  b.wbuf = titleBuf;
+  b.buflen = info_length;
+
+  if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen))) {
     Log0(ifop->ctx, "libdvdread: Unable to read read TT_SRPT.");
     ifoFree_TT_SRPT(ifofile);
     return 0;
@@ -1262,20 +1273,18 @@ int ifoRead_TT_SRPT(ifo_handle_t *ifofile) {
     tt_srpt->nr_of_srpts=info_length/TITLE_INFO_SIZE;
   }
 
-  for(i =  0; i < tt_srpt->nr_of_srpts; i++) {
-    B2N_16(tt_srpt->title[i].nr_of_ptts);
-    B2N_16(tt_srpt->title[i].parental_id);
-    B2N_32(tt_srpt->title[i].title_set_sector);
-  }
-
-
-  CHECK_ZERO(tt_srpt->zero_1);
   CHECK_VALUE(tt_srpt->nr_of_srpts != 0);
   CHECK_VALUE(tt_srpt->nr_of_srpts < 100); /* ?? */
   CHECK_VALUE(tt_srpt->nr_of_srpts * TITLE_INFO_SIZE <= info_length);
 
   for(i = 0; i < tt_srpt->nr_of_srpts; i++) {
-    read_playback_type(&tt_srpt->title[i].pb_ty);
+    read_playback_type_(&b, &tt_srpt->title[i].pb_ty);
+    ReadBuf8(&b, &tt_srpt->title[i].nr_of_angles);
+    ReadBuf16(&b, &tt_srpt->title[i].nr_of_ptts);
+    ReadBuf16(&b, &tt_srpt->title[i].parental_id);
+    ReadBuf8(&b, &tt_srpt->title[i].title_set_nr);
+    ReadBuf8(&b, &tt_srpt->title[i].vts_ttn);
+    ReadBuf32(&b, &tt_srpt->title[i].title_set_sector);
     CHECK_VALUE(tt_srpt->title[i].pb_ty.zero_1 == 0);
     CHECK_VALUE(tt_srpt->title[i].nr_of_angles != 0);
     CHECK_VALUE(tt_srpt->title[i].nr_of_angles < 10);
