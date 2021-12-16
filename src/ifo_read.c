@@ -1675,6 +1675,8 @@ int ifoRead_VTS_TMAPT(ifo_handle_t *ifofile) {
   unsigned int offset;
   int info_length;
   unsigned int i, j;
+  char buf[VTS_TMAPT_SIZE];
+  buf_reader b;
 
   if(!ifofile)
     return 0;
@@ -1698,17 +1700,19 @@ int ifoRead_VTS_TMAPT(ifo_handle_t *ifofile) {
 
   ifofile->vts_tmapt = vts_tmapt;
 
-  if(!(DVDReadBytes(ifop->file, vts_tmapt, VTS_TMAPT_SIZE))) {
+  b.wbuf = buf;
+  b.buflen = VTS_TMAPT_SIZE;
+
+  if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen))) {
     Log0(ifop->ctx, "Unable to read VTS_TMAPT.");
     free(vts_tmapt);
     ifofile->vts_tmapt = NULL;
     return 0;
   }
 
-  B2N_16(vts_tmapt->nr_of_tmaps);
-  B2N_32(vts_tmapt->last_byte);
-
-  CHECK_ZERO(vts_tmapt->zero_1);
+  ReadBuf16(&b, &vts_tmapt->nr_of_tmaps);
+  SkipZeroBuf(&b, 2);
+  ReadBuf32(&b, &vts_tmapt->last_byte);
 
   info_length = vts_tmapt->nr_of_tmaps * sizeof(*vts_tmap_srp);
 
@@ -1721,7 +1725,11 @@ int ifoRead_VTS_TMAPT(ifo_handle_t *ifofile) {
 
   vts_tmapt->tmap_offset = vts_tmap_srp;
 
-  if(!(DVDReadBytes(ifop->file, vts_tmap_srp, info_length))) {
+  char bufsrp[info_length];
+  b.wbuf = bufsrp;
+  b.buflen = info_length;
+
+  if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen))) {
     Log0(ifop->ctx, "Unable to read VTS_TMAPT.");
     free(vts_tmap_srp);
     free(vts_tmapt);
@@ -1730,10 +1738,10 @@ int ifoRead_VTS_TMAPT(ifo_handle_t *ifofile) {
   }
 
   for (i = 0; i < vts_tmapt->nr_of_tmaps; i++) {
-    B2N_32(vts_tmap_srp[i]);
+    ReadBuf32(&b, &vts_tmap_srp[i]);
   }
 
-  vts_tmapt->tmap = calloc(1, vts_tmapt->nr_of_tmaps * sizeof(vts_tmap_t));
+  vts_tmapt->tmap = calloc(vts_tmapt->nr_of_tmaps, sizeof(vts_tmap_t));
   if(!vts_tmapt->tmap) {
     free(vts_tmap_srp);
     free(vts_tmapt);
@@ -1742,19 +1750,25 @@ int ifoRead_VTS_TMAPT(ifo_handle_t *ifofile) {
   }
 
   for(i = 0; i < vts_tmapt->nr_of_tmaps; i++) {
+    char buftmap[VTS_TMAP_SIZE];
+
+    b.wbuf = buftmap;
+    b.buflen = VTS_TMAP_SIZE;
+
     if(!DVDFileSeek_(ifop->file, offset + vts_tmap_srp[i])) {
       ifoFree_VTS_TMAPT(ifofile);
       return 0;
     }
 
-    if(!(DVDReadBytes(ifop->file, &vts_tmapt->tmap[i], VTS_TMAP_SIZE))) {
+    if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen))) {
       Log0(ifop->ctx, "Unable to read VTS_TMAP.");
       ifoFree_VTS_TMAPT(ifofile);
       return 0;
     }
 
-    B2N_16(vts_tmapt->tmap[i].nr_of_entries);
-    CHECK_ZERO(vts_tmapt->tmap[i].zero_1);
+    ReadBuf8(&b, &vts_tmapt->tmap[i].tmu);
+    SkipZeroBuf(&b, 1);
+    ReadBuf16(&b, &vts_tmapt->tmap[i].nr_of_entries);
 
     if(vts_tmapt->tmap[i].nr_of_entries == 0) { /* Early out if zero entries */
       vts_tmapt->tmap[i].map_ent = NULL;
@@ -1769,14 +1783,18 @@ int ifoRead_VTS_TMAPT(ifo_handle_t *ifofile) {
       return 0;
     }
 
-    if(!(DVDReadBytes(ifop->file, vts_tmapt->tmap[i].map_ent, info_length))) {
+    char bufmaps[info_length];
+    b.wbuf = bufmaps;
+    b.buflen = info_length;
+
+    if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen))) {
       Log0(ifop->ctx, "Unable to read VTS_TMAP_ENT.");
       ifoFree_VTS_TMAPT(ifofile);
       return 0;
     }
 
     for(j = 0; j < vts_tmapt->tmap[i].nr_of_entries; j++)
-      B2N_32(vts_tmapt->tmap[i].map_ent[j]);
+      ReadBuf32(&b, &vts_tmapt->tmap[i].map_ent[j]);
   }
 
   return 1;
