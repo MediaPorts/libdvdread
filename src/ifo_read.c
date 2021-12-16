@@ -2480,7 +2480,8 @@ int ifoRead_VTS_ATRT(ifo_handle_t *ifofile) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   vts_atrt_t *vts_atrt;
   unsigned int i, info_length, sector;
-  uint32_t *data;
+  char buf[VTS_ATRT_SIZE];
+  buf_reader b;
 
   if(!ifofile)
     return 0;
@@ -2501,56 +2502,62 @@ int ifoRead_VTS_ATRT(ifo_handle_t *ifofile) {
 
   ifofile->vts_atrt = vts_atrt;
 
-  if(!(DVDReadBytes(ifop->file, vts_atrt, VTS_ATRT_SIZE))) {
+  b.wbuf = buf;
+  b.buflen = VTS_ATRT_SIZE;
+
+  if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen))) {
     free(vts_atrt);
     ifofile->vts_atrt = NULL;
     return 0;
   }
 
-  B2N_16(vts_atrt->nr_of_vtss);
-  B2N_32(vts_atrt->last_byte);
+  ReadBuf16(&b, &vts_atrt->nr_of_vtss);
+  SkipZeroBuf(&b, 2);
+  ReadBuf32(&b, &vts_atrt->last_byte);
 
-  CHECK_ZERO(vts_atrt->zero_1);
   CHECK_VALUE(vts_atrt->nr_of_vtss != 0);
   CHECK_VALUE(vts_atrt->nr_of_vtss < 100); /* ?? */
   CHECK_VALUE((uint32_t)vts_atrt->nr_of_vtss * (4 + VTS_ATTRIBUTES_MIN_SIZE) +
               VTS_ATRT_SIZE < vts_atrt->last_byte + 1);
 
   info_length = vts_atrt->nr_of_vtss * sizeof(uint32_t);
-  data = calloc(1, info_length);
-  if(!data) {
+  char bufoff[info_length];
+
+  vts_atrt->vts_atrt_offsets = calloc(vts_atrt->nr_of_vtss, sizeof(uint32_t));
+  if(!vts_atrt->vts_atrt_offsets) {
     free(vts_atrt);
     ifofile->vts_atrt = NULL;
     return 0;
   }
 
-  vts_atrt->vts_atrt_offsets = data;
+  b.wbuf = bufoff;
+  b.buflen = info_length;
 
-  if(!(DVDReadBytes(ifop->file, data, info_length))) {
-    free(data);
+  if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen))) {
+    free(vts_atrt->vts_atrt_offsets);
     free(vts_atrt);
     ifofile->vts_atrt = NULL;
     return 0;
   }
 
   for(i = 0; i < vts_atrt->nr_of_vtss; i++) {
-    B2N_32(data[i]);
-    CHECK_VALUE(data[i] + VTS_ATTRIBUTES_MIN_SIZE < vts_atrt->last_byte + 1);
+    ReadBuf32(&b, &vts_atrt->vts_atrt_offsets[i]);
+    CHECK_VALUE(vts_atrt->vts_atrt_offsets[i] + VTS_ATTRIBUTES_MIN_SIZE < vts_atrt->last_byte + 1);
   }
 
   info_length = vts_atrt->nr_of_vtss * sizeof(vts_attributes_t);
   vts_atrt->vts = calloc(1, info_length);
   if(!vts_atrt->vts) {
-    free(data);
+    free(vts_atrt->vts_atrt_offsets);
     free(vts_atrt);
     ifofile->vts_atrt = NULL;
     return 0;
   }
   for(i = 0; i < vts_atrt->nr_of_vtss; i++) {
-    unsigned int offset = data[i];
+    unsigned int offset = vts_atrt->vts_atrt_offsets[i];
     if(!ifoRead_VTS_ATTRIBUTES(ifofile, &(vts_atrt->vts[i]),
                                (sector * DVD_BLOCK_LEN) + offset)) {
-      free(data);
+      free(vts_atrt->vts_atrt_offsets);
       free(vts_atrt);
       ifofile->vts_atrt = NULL;
       return 0;
