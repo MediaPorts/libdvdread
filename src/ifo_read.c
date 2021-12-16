@@ -2588,6 +2588,8 @@ void ifoFree_VTS_ATRT(ifo_handle_t *ifofile) {
 int ifoRead_TXTDT_MGI(ifo_handle_t *ifofile) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   txtdt_mgi_t *txtdt_mgi;
+  char buf[TXTDT_MGI_SIZE];
+  buf_reader b;
 
   if(!ifofile)
     return 0;
@@ -2609,12 +2611,20 @@ int ifoRead_TXTDT_MGI(ifo_handle_t *ifofile) {
   }
   ifofile->txtdt_mgi = txtdt_mgi;
 
-  if(!(DVDReadBytes(ifop->file, txtdt_mgi, TXTDT_MGI_SIZE))) {
+  b.wbuf = buf;
+  b.buflen = TXTDT_MGI_SIZE;
+
+  if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen))) {
     Log0(ifop->ctx, "Unable to read TXTDT_MGI.");
     free(txtdt_mgi);
     ifofile->txtdt_mgi = NULL;
     return 0;
   }
+
+  ReadBufData(&b, txtdt_mgi->disc_name, 12);
+  SkipBuf(&b, 2);
+  ReadBuf16(&b, &txtdt_mgi->nr_of_language_units);
+  ReadBuf32(&b, &txtdt_mgi->last_byte);
 
   /* Log1(ifop->ctx, "-- Not done yet --\n"); */
   return 1;
