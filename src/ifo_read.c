@@ -1878,22 +1878,27 @@ static int ifoRead_C_ADT_internal(ifo_handle_t *ifofile,
                                   c_adt_t *c_adt, unsigned int sector) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   size_t i, info_length;
+  char buf[C_ADT_SIZE];
+  buf_reader b;
 
   if(!DVDFileSeek_(ifop->file, sector * DVD_BLOCK_LEN))
     return 0;
 
-  if(!(DVDReadBytes(ifop->file, c_adt, C_ADT_SIZE)))
+  b.wbuf = buf;
+  b.buflen = C_ADT_SIZE;
+
+  if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen)))
     return 0;
 
-  B2N_16(c_adt->nr_of_vobs);
-  B2N_32(c_adt->last_byte);
+  ReadBuf16(&b, &c_adt->nr_of_vobs);
+  SkipZeroBuf(&b, 2);
+  ReadBuf32(&b, &c_adt->last_byte);
 
   if(c_adt->last_byte + 1 < C_ADT_SIZE)
     return 0;
 
   info_length = c_adt->last_byte + 1 - C_ADT_SIZE;
 
-  CHECK_ZERO(c_adt->zero_1);
   /* assert(c_adt->nr_of_vobs > 0);
      Magic Knight Rayearth Daybreak is mastered very strange and has
      Titles with a VOBS that has no cells. */
@@ -1911,23 +1916,30 @@ static int ifoRead_C_ADT_internal(ifo_handle_t *ifofile,
   if(!c_adt->cell_adr_table)
     return 0;
 
-  if(info_length &&
-     !(DVDReadBytes(ifop->file, c_adt->cell_adr_table, info_length))) {
-    free(c_adt->cell_adr_table);
-    return 0;
-  }
+  if(info_length)
+  {
+    char bufcells[info_length];
+    b.wbuf = bufcells;
+    b.buflen = info_length;
 
-  for(i = 0; i < info_length/CELL_ADDR_SIZE; i++) {
-    B2N_16(c_adt->cell_adr_table[i].vob_id);
-    B2N_32(c_adt->cell_adr_table[i].start_sector);
-    B2N_32(c_adt->cell_adr_table[i].last_sector);
+    if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen))) {
+      free(c_adt->cell_adr_table);
+      return 0;
+    }
 
-    CHECK_ZERO(c_adt->cell_adr_table[i].zero_1);
-    CHECK_VALUE(c_adt->cell_adr_table[i].vob_id > 0);
-    CHECK_VALUE(c_adt->cell_adr_table[i].vob_id <= c_adt->nr_of_vobs);
-    CHECK_VALUE(c_adt->cell_adr_table[i].cell_id > 0);
-    CHECK_VALUE(c_adt->cell_adr_table[i].start_sector <
-                c_adt->cell_adr_table[i].last_sector);
+    for(i = 0; i < info_length/CELL_ADDR_SIZE; i++) {
+      ReadBuf16(&b, &c_adt->cell_adr_table[i].vob_id);
+      ReadBuf8(&b, &c_adt->cell_adr_table[i].cell_id);
+      SkipZeroBuf(&b, 1);
+      ReadBuf32(&b, &c_adt->cell_adr_table[i].start_sector);
+      ReadBuf32(&b, &c_adt->cell_adr_table[i].last_sector);
+
+      CHECK_VALUE(c_adt->cell_adr_table[i].vob_id > 0);
+      CHECK_VALUE(c_adt->cell_adr_table[i].vob_id <= c_adt->nr_of_vobs);
+      CHECK_VALUE(c_adt->cell_adr_table[i].cell_id > 0);
+      CHECK_VALUE(c_adt->cell_adr_table[i].start_sector <
+                  c_adt->cell_adr_table[i].last_sector);
+    }
   }
 
   return 1;
