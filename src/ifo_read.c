@@ -2060,18 +2060,23 @@ static int ifoRead_PGCIT_internal(ifo_handle_t *ifofile, pgcit_t *pgcit,
                                   unsigned int offset) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   int i, info_length;
-  uint8_t *data, *ptr;
+  char *data;
+  char buf[PGCIT_SIZE];
+  buf_reader b;
 
   if(!DVDFileSeek_(ifop->file, offset))
     return 0;
 
-  if(!(DVDReadBytes(ifop->file, pgcit, PGCIT_SIZE)))
+  b.wbuf = buf;
+  b.buflen = PGCIT_SIZE;
+
+  if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen)))
     return 0;
 
-  B2N_16(pgcit->nr_of_pgci_srp);
-  B2N_32(pgcit->last_byte);
+  ReadBuf16(&b, &pgcit->nr_of_pgci_srp);
+  SkipZeroBuf(&b, 2);
+  ReadBuf32(&b, &pgcit->last_byte);
 
-  CHECK_ZERO(pgcit->zero_1);
   /* assert(pgcit->nr_of_pgci_srp != 0);
      Magic Knight Rayearth Daybreak is mastered very strange and has
      Titles with 0 PTTs. */
@@ -2087,7 +2092,10 @@ static int ifoRead_PGCIT_internal(ifo_handle_t *ifofile, pgcit_t *pgcit,
   if(!data)
     return 0;
 
-  if(info_length && !(DVDReadBytes(ifop->file, data, info_length))) {
+  b.wbuf = data;
+  b.buflen = info_length;
+
+  if(info_length && !(DVDReadBytes(ifop->file, b.wbuf, b.buflen))) {
     free(data);
     return 0;
   }
@@ -2097,11 +2105,8 @@ static int ifoRead_PGCIT_internal(ifo_handle_t *ifofile, pgcit_t *pgcit,
     free(data);
     return 0;
   }
-  ptr = data;
   for(i = 0; i < pgcit->nr_of_pgci_srp; i++) {
-    memcpy(&pgcit->pgci_srp[i], ptr, PGCI_SRP_SIZE);
-    ptr += PGCI_SRP_SIZE;
-    read_pgci_srp(&pgcit->pgci_srp[i]);
+    read_pgci_srp_(&b, &pgcit->pgci_srp[i]);
     CHECK_VALUE(pgcit->pgci_srp[i].zero_1 == 0);
   }
   free(data);
