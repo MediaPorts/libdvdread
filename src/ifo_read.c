@@ -745,8 +745,10 @@ static int ifoRead_VTS(ifo_handle_t *ifofile) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   vtsi_mat_t *vtsi_mat;
   int i;
+  char buf[VTSI_MAT_SIZE];
+  buf_reader b;
 
-  vtsi_mat = calloc(1, sizeof(vtsi_mat_t));
+  vtsi_mat = calloc(1, sizeof(*vtsi_mat));
   if(!vtsi_mat)
     return 0;
 
@@ -758,11 +760,16 @@ static int ifoRead_VTS(ifo_handle_t *ifofile) {
     return 0;
   }
 
-  if(!(DVDReadBytes(ifop->file, vtsi_mat, VTSI_MAT_SIZE))) {
+  b.wbuf = buf;
+  b.buflen = VTSI_MAT_SIZE;
+
+  if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen))) {
     free(ifofile->vtsi_mat);
     ifofile->vtsi_mat = NULL;
     return 0;
   }
+
+  ReadBufData(&b, vtsi_mat->vts_identifier, 12);
 
   if(strncmp("DVDVIDEO-VTS", vtsi_mat->vts_identifier, 12) != 0) {
     free(ifofile->vtsi_mat);
@@ -770,51 +777,47 @@ static int ifoRead_VTS(ifo_handle_t *ifofile) {
     return 0;
   }
 
-  read_video_attr(&vtsi_mat->vtsm_video_attr);
-  read_video_attr(&vtsi_mat->vts_video_attr);
-  read_audio_attr(&vtsi_mat->vtsm_audio_attr);
+  ReadBuf32(&b, &vtsi_mat->vts_last_sector);
+  SkipZeroBuf(&b, 12);
+  ReadBuf32(&b, &vtsi_mat->vtsi_last_sector);
+  SkipZeroBuf(&b, 1);
+  ReadBuf8(&b, &vtsi_mat->specification_version);
+  ReadBuf32(&b, &vtsi_mat->vts_category);
+  SkipZeroBuf(&b, 90);
+  ReadBuf32(&b, &vtsi_mat->vtsi_last_byte);
+  SkipZeroBuf(&b, 60);
+  ReadBuf32(&b, &vtsi_mat->vtsm_vobs);
+  ReadBuf32(&b, &vtsi_mat->vtstt_vobs);
+  ReadBuf32(&b, &vtsi_mat->vts_ptt_srpt);
+  ReadBuf32(&b, &vtsi_mat->vts_pgcit);
+  ReadBuf32(&b, &vtsi_mat->vtsm_pgci_ut);
+  ReadBuf32(&b, &vtsi_mat->vts_tmapt);
+  ReadBuf32(&b, &vtsi_mat->vtsm_c_adt);
+  ReadBuf32(&b, &vtsi_mat->vtsm_vobu_admap);
+  ReadBuf32(&b, &vtsi_mat->vts_c_adt);
+  ReadBuf32(&b, &vtsi_mat->vts_vobu_admap);
+  SkipZeroBuf(&b, 24);
+  read_video_attr_(&b, &vtsi_mat->vtsm_video_attr);
+  SkipZeroBuf(&b, 1);
+  ReadBuf8(&b, &vtsi_mat->nr_of_vtsm_audio_streams);
+  read_audio_attr_(&b, &vtsi_mat->vtsm_audio_attr);
+  SkipZeroBuf(&b, AUDIO_ATTR_SIZE * 7);
+  SkipZeroBuf(&b, 17);
+  ReadBuf8(&b, &vtsi_mat->nr_of_vtsm_subp_streams);
+  read_subp_attr_(&b, &vtsi_mat->vtsm_subp_attr);
+  SkipZeroBuf(&b, SUBP_ATTR_SIZE * 27);
+  SkipZeroBuf(&b, 2);
+  read_video_attr_(&b, &vtsi_mat->vts_video_attr);
+  SkipZeroBuf(&b, 1);
+  ReadBuf8(&b, &vtsi_mat->nr_of_vts_audio_streams);
   for(i=0; i<8; i++)
-    read_audio_attr(&vtsi_mat->vts_audio_attr[i]);
-  read_subp_attr(&vtsi_mat->vtsm_subp_attr);
+    read_audio_attr_(&b, &vtsi_mat->vts_audio_attr[i]);
+  SkipZeroBuf(&b, 17);
+  ReadBuf8(&b, &vtsi_mat->nr_of_vts_subp_streams);
   for(i=0; i<32; i++)
-    read_subp_attr(&vtsi_mat->vts_subp_attr[i]);
-  B2N_32(vtsi_mat->vts_last_sector);
-  B2N_32(vtsi_mat->vtsi_last_sector);
-  B2N_32(vtsi_mat->vts_category);
-  B2N_32(vtsi_mat->vtsi_last_byte);
-  B2N_32(vtsi_mat->vtsm_vobs);
-  B2N_32(vtsi_mat->vtstt_vobs);
-  B2N_32(vtsi_mat->vts_ptt_srpt);
-  B2N_32(vtsi_mat->vts_pgcit);
-  B2N_32(vtsi_mat->vtsm_pgci_ut);
-  B2N_32(vtsi_mat->vts_tmapt);
-  B2N_32(vtsi_mat->vtsm_c_adt);
-  B2N_32(vtsi_mat->vtsm_vobu_admap);
-  B2N_32(vtsi_mat->vts_c_adt);
-  B2N_32(vtsi_mat->vts_vobu_admap);
+    read_subp_attr_(&b, &vtsi_mat->vts_subp_attr[i]);
+  SkipZeroBuf(&b, 2);
 
-
-  CHECK_ZERO(vtsi_mat->zero_1);
-  CHECK_ZERO(vtsi_mat->zero_2);
-  CHECK_ZERO(vtsi_mat->zero_3);
-  CHECK_ZERO(vtsi_mat->zero_4);
-  CHECK_ZERO(vtsi_mat->zero_5);
-  CHECK_ZERO(vtsi_mat->zero_6);
-  CHECK_ZERO(vtsi_mat->zero_7);
-  CHECK_ZERO(vtsi_mat->zero_8);
-  CHECK_ZERO(vtsi_mat->zero_9);
-  CHECK_ZERO(vtsi_mat->zero_10);
-  CHECK_ZERO(vtsi_mat->zero_11);
-  CHECK_ZERO(vtsi_mat->zero_12);
-  CHECK_ZERO(vtsi_mat->zero_13);
-  CHECK_ZERO(vtsi_mat->zero_14);
-  CHECK_ZERO(vtsi_mat->zero_15);
-  CHECK_ZERO(vtsi_mat->zero_16);
-  CHECK_ZERO(vtsi_mat->zero_17);
-  CHECK_ZERO(vtsi_mat->zero_18);
-  CHECK_ZERO(vtsi_mat->zero_19);
-  CHECK_ZERO(vtsi_mat->zero_20);
-  CHECK_ZERO(vtsi_mat->zero_21);
   CHECK_VALUE(vtsi_mat->vtsi_last_sector*2 <= vtsi_mat->vts_last_sector);
   CHECK_VALUE(vtsi_mat->vtsi_last_byte/DVD_BLOCK_LEN <= vtsi_mat->vtsi_last_sector);
   CHECK_VALUE(vtsi_mat->vtsm_vobs == 0 ||
@@ -844,13 +847,12 @@ static int ifoRead_VTS(ifo_handle_t *ifofile) {
     CHECK_ZERO(vtsi_mat->vts_subp_attr[i]);
 
   for(i = 0; i < 8; i++) {
-    read_multichannel_ext(&vtsi_mat->vts_mu_audio_attr[i], ifop);
+    read_multichannel_ext_(&b, ifop, &vtsi_mat->vts_mu_audio_attr[i]);
     CHECK_ZERO0(vtsi_mat->vts_mu_audio_attr[i].zero1);
     CHECK_ZERO0(vtsi_mat->vts_mu_audio_attr[i].zero2);
     CHECK_ZERO0(vtsi_mat->vts_mu_audio_attr[i].zero3);
     CHECK_ZERO0(vtsi_mat->vts_mu_audio_attr[i].zero4);
     CHECK_ZERO0(vtsi_mat->vts_mu_audio_attr[i].zero5);
-    CHECK_ZERO(vtsi_mat->vts_mu_audio_attr[i].zero6);
   }
 
   return 1;
