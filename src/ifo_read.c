@@ -526,7 +526,7 @@ static int ifoRead_VMG(ifo_handle_t *ifofile) {
     return 0;
   }
 
-  if(!DVDReadBytes(ifop->file, vmgi_mat, sizeof(vmgi_mat_t))) {
+  if(!DVDReadBytes(ifop->file, vmgi_mat, VMGI_MAT_SIZE)) {
     free(ifofile->vmgi_mat);
     ifofile->vmgi_mat = NULL;
     return 0;
@@ -621,7 +621,7 @@ static int ifoRead_VTS(ifo_handle_t *ifofile) {
     return 0;
   }
 
-  if(!(DVDReadBytes(ifop->file, vtsi_mat, sizeof(vtsi_mat_t)))) {
+  if(!(DVDReadBytes(ifop->file, vtsi_mat, VTSI_MAT_SIZE))) {
     free(ifofile->vtsi_mat);
     ifofile->vtsi_mat = NULL;
     return 0;
@@ -826,7 +826,7 @@ static int ifoRead_CELL_PLAYBACK_TBL(ifo_handle_t *ifofile,
                                      unsigned int nr, unsigned int offset) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   unsigned int i;
-  unsigned int size = nr * sizeof(cell_playback_t);
+  unsigned int size = nr * CELL_PLAYBACK_SIZE;
 
   if(!DVDFileSeek_(ifop->file, offset))
     return 0;
@@ -852,7 +852,7 @@ static int ifoRead_CELL_POSITION_TBL(ifo_handle_t *ifofile,
                                      unsigned int nr, unsigned int offset) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   unsigned int i;
-  unsigned int size = nr * sizeof(cell_position_t);
+  unsigned int size = nr * CELL_POSITION_SIZE;
 
   if(!DVDFileSeek_(ifop->file, offset))
     return 0;
@@ -1063,11 +1063,11 @@ int ifoRead_TT_SRPT(ifo_handle_t *ifofile) {
 
   /* E-One releases don't fill this field */
   if(tt_srpt->last_byte == 0) {
-    tt_srpt->last_byte = tt_srpt->nr_of_srpts * sizeof(title_info_t) - 1 + TT_SRPT_SIZE;
+    tt_srpt->last_byte = tt_srpt->nr_of_srpts * TITLE_INFO_SIZE - 1 + TT_SRPT_SIZE;
   }
   info_length = tt_srpt->last_byte + 1 - TT_SRPT_SIZE;
 
-  tt_srpt->title = calloc(1, info_length);
+  tt_srpt->title = calloc(1, tt_srpt->nr_of_srpts * sizeof(*tt_srpt->title));
   if(!tt_srpt->title) {
     free(tt_srpt);
     ifofile->tt_srpt = NULL;
@@ -1079,10 +1079,10 @@ int ifoRead_TT_SRPT(ifo_handle_t *ifofile) {
     return 0;
   }
 
-  if(tt_srpt->nr_of_srpts>info_length/sizeof(title_info_t)){
+  if(tt_srpt->nr_of_srpts>info_length/TITLE_INFO_SIZE){
     Log1(ifop->ctx, "data mismatch: info_length (%zd)!= nr_of_srpts (%d). Truncating.",
-            info_length/sizeof(title_info_t),tt_srpt->nr_of_srpts);
-    tt_srpt->nr_of_srpts=info_length/sizeof(title_info_t);
+            info_length/TITLE_INFO_SIZE,tt_srpt->nr_of_srpts);
+    tt_srpt->nr_of_srpts=info_length/TITLE_INFO_SIZE;
   }
 
   for(i =  0; i < tt_srpt->nr_of_srpts; i++) {
@@ -1095,7 +1095,7 @@ int ifoRead_TT_SRPT(ifo_handle_t *ifofile) {
   CHECK_ZERO(tt_srpt->zero_1);
   CHECK_VALUE(tt_srpt->nr_of_srpts != 0);
   CHECK_VALUE(tt_srpt->nr_of_srpts < 100); /* ?? */
-  CHECK_VALUE(tt_srpt->nr_of_srpts * sizeof(title_info_t) <= info_length);
+  CHECK_VALUE(tt_srpt->nr_of_srpts * TITLE_INFO_SIZE <= info_length);
 
   for(i = 0; i < tt_srpt->nr_of_srpts; i++) {
     read_playback_type(&tt_srpt->title[i].pb_ty);
@@ -1115,13 +1115,13 @@ int ifoRead_TT_SRPT(ifo_handle_t *ifofile) {
   /* Make this a function */
 #if 0
   if(memcmp((uint8_t *)tt_srpt->title +
-            tt_srpt->nr_of_srpts * sizeof(title_info_t),
+            tt_srpt->nr_of_srpts * TITLE_INFO_SIZE,
             my_friendly_zeros,
-            info_length - tt_srpt->nr_of_srpts * sizeof(title_info_t))) {
+            info_length - tt_srpt->nr_of_srpts * TITLE_INFO_SIZE)) {
     Log1(ifop->ctx, "VMG_PTT_SRPT slack is != 0, ");
     hexdump((uint8_t *)tt_srpt->title +
-            tt_srpt->nr_of_srpts * sizeof(title_info_t),
-            info_length - tt_srpt->nr_of_srpts * sizeof(title_info_t));
+            tt_srpt->nr_of_srpts * TITLE_INFO_SIZE,
+            info_length - tt_srpt->nr_of_srpts * TITLE_INFO_SIZE);
   }
 #endif
 
@@ -1182,7 +1182,7 @@ int ifoRead_VTS_PTT_SRPT(ifo_handle_t *ifofile) {
 
   /* E-One releases don't fill this field */
   if(vts_ptt_srpt->last_byte == 0) {
-    vts_ptt_srpt->last_byte  = vts_ptt_srpt->nr_of_srpts * sizeof(*data) - 1 + VTS_PTT_SRPT_SIZE;
+    vts_ptt_srpt->last_byte  = vts_ptt_srpt->nr_of_srpts * sizeof(uint32_t) - 1 + VTS_PTT_SRPT_SIZE;
   }
   info_length = vts_ptt_srpt->last_byte + 1 - VTS_PTT_SRPT_SIZE;
   data = calloc(1, info_length);
@@ -1194,7 +1194,7 @@ int ifoRead_VTS_PTT_SRPT(ifo_handle_t *ifofile) {
     goto fail;
   }
 
-  if(vts_ptt_srpt->nr_of_srpts > info_length / sizeof(*data)) {
+  if(vts_ptt_srpt->nr_of_srpts > info_length / sizeof(uint32_t)) {
     Log0(ifop->ctx, "PTT search table too small.");
     goto fail;
   }
@@ -1208,17 +1208,17 @@ int ifoRead_VTS_PTT_SRPT(ifo_handle_t *ifofile) {
     /* Transformers 3 has PTT start bytes that point outside the SRPT PTT */
     uint32_t start = data[i];
     B2N_32(start);
-    if(start + sizeof(ptt_info_t) > vts_ptt_srpt->last_byte + 1) {
+    if(start + PTT_INFO_SIZE > vts_ptt_srpt->last_byte + 1) {
       /* don't mess with any bytes beyond the end of the allocation */
       vts_ptt_srpt->nr_of_srpts = i;
       break;
     }
     data[i] = start;
-    /* assert(data[i] + sizeof(ptt_info_t) <= vts_ptt_srpt->last_byte + 1);
+    /* assert(data[i] + PTT_INFO_SIZE <= vts_ptt_srpt->last_byte + 1);
        Magic Knight Rayearth Daybreak is mastered very strange and has
        Titles with 0 PTTs. They all have a data[i] offsets beyond the end of
        of the vts_ptt_srpt structure. */
-    CHECK_VALUE(data[i] + sizeof(ptt_info_t) <= vts_ptt_srpt->last_byte + 1 + 4);
+    CHECK_VALUE(data[i] + PTT_INFO_SIZE <= vts_ptt_srpt->last_byte + 1 + 4);
   }
 
   vts_ptt_srpt->ttu_offset = data;
@@ -1252,7 +1252,7 @@ int ifoRead_VTS_PTT_SRPT(ifo_handle_t *ifofile) {
     }
     for(j = 0; j < vts_ptt_srpt->title[i].nr_of_ptts; j++) {
       /* The assert placed here because of Magic Knight Rayearth Daybreak */
-      CHECK_VALUE(data[i] + sizeof(ptt_info_t) <= vts_ptt_srpt->last_byte + 1);
+      CHECK_VALUE(data[i] + PTT_INFO_SIZE <= vts_ptt_srpt->last_byte + 1);
       vts_ptt_srpt->title[i].ptt[j].pgcn
         = *(uint16_t*)(((char *)data) + data[i] + 4*j - VTS_PTT_SRPT_SIZE);
       vts_ptt_srpt->title[i].ptt[j].pgn
@@ -1487,7 +1487,7 @@ int ifoRead_VTS_TMAPT(ifo_handle_t *ifofile) {
 
   CHECK_ZERO(vts_tmapt->zero_1);
 
-  info_length = vts_tmapt->nr_of_tmaps * 4;
+  info_length = vts_tmapt->nr_of_tmaps * sizeof(*vts_tmap_srp);
 
   vts_tmap_srp = calloc(1, info_length);
   if(!vts_tmap_srp) {
@@ -1513,7 +1513,7 @@ int ifoRead_VTS_TMAPT(ifo_handle_t *ifofile) {
 
   info_length = vts_tmapt->nr_of_tmaps * sizeof(vts_tmap_t);
 
-  vts_tmapt->tmap = calloc(1, info_length);
+  vts_tmapt->tmap = calloc(1, vts_tmapt->nr_of_tmaps * sizeof(vts_tmap_t));
   if(!vts_tmapt->tmap) {
     free(vts_tmap_srp);
     free(vts_tmapt);
@@ -1659,14 +1659,14 @@ static int ifoRead_C_ADT_internal(ifo_handle_t *ifofile,
   /* assert(c_adt->nr_of_vobs > 0);
      Magic Knight Rayearth Daybreak is mastered very strange and has
      Titles with a VOBS that has no cells. */
-  CHECK_VALUE(info_length % sizeof(cell_adr_t) == 0);
+  CHECK_VALUE(info_length % CELL_ADDR_SIZE == 0);
 
-  /* assert(info_length / sizeof(cell_adr_t) >= c_adt->nr_of_vobs);
+  /* assert(info_length / CELL_ADDR_SIZE >= c_adt->nr_of_vobs);
      Enemy of the State region 2 (de) has Titles where nr_of_vobs field
      is to high, they high ones are never referenced though. */
-  if(info_length / sizeof(cell_adr_t) < c_adt->nr_of_vobs) {
+  if(info_length / CELL_ADDR_SIZE < c_adt->nr_of_vobs) {
     Log1(ifop->ctx, "C_ADT nr_of_vobs > available info entries");
-    c_adt->nr_of_vobs = info_length / sizeof(cell_adr_t);
+    c_adt->nr_of_vobs = info_length / CELL_ADDR_SIZE;
   }
 
   c_adt->cell_adr_table = calloc(1, info_length);
@@ -1679,7 +1679,7 @@ static int ifoRead_C_ADT_internal(ifo_handle_t *ifofile,
     return 0;
   }
 
-  for(i = 0; i < info_length/sizeof(cell_adr_t); i++) {
+  for(i = 0; i < info_length/CELL_ADDR_SIZE; i++) {
     B2N_16(c_adt->cell_adr_table[i].vob_id);
     B2N_32(c_adt->cell_adr_table[i].start_sector);
     B2N_32(c_adt->cell_adr_table[i].last_sector);
@@ -2148,7 +2148,7 @@ static int ifoRead_VTS_ATTRIBUTES(ifo_handle_t *ifofile,
   if(!DVDFileSeek_(ifop->file, offset))
     return 0;
 
-  if(!(DVDReadBytes(ifop->file, vts_attributes, sizeof(vts_attributes_t))))
+  if(!(DVDReadBytes(ifop->file, vts_attributes, VTS_ATTRIBUTES_SIZE)))
     return 0;
 
   read_video_attr(&vts_attributes->vtsm_vobs_attr);
@@ -2178,7 +2178,7 @@ static int ifoRead_VTS_ATTRIBUTES(ifo_handle_t *ifofile,
   {
     unsigned int nr_coded;
     CHECK_VALUE(vts_attributes->last_byte + 1 >= VTS_ATTRIBUTES_MIN_SIZE);
-    nr_coded = (vts_attributes->last_byte + 1 - VTS_ATTRIBUTES_MIN_SIZE)/6;
+    nr_coded = (vts_attributes->last_byte + 1 - VTS_ATTRIBUTES_MIN_SIZE)/SUBP_ATTR_SIZE;
     /* This is often nr_coded = 70, how do you know how many there really are? */
     if(nr_coded > 32) { /* We haven't read more from disk/file anyway */
       nr_coded = 32;
