@@ -861,15 +861,23 @@ static int ifoRead_PGC_COMMAND_TBL(ifo_handle_t *ifofile,
                                    pgc_command_tbl_t *cmd_tbl,
                                    unsigned int offset) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
+  char buf[PGC_COMMAND_TBL_SIZE];
+  unsigned i;
+  buf_reader b;
+
   if(!DVDFileSeek_(ifop->file, offset))
     return 0;
 
-  if(!(DVDReadBytes(ifop->file, cmd_tbl, PGC_COMMAND_TBL_SIZE)))
+  b.wbuf = buf;
+  b.buflen = PGC_COMMAND_TBL_SIZE;
+
+  if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen)))
     return 0;
 
-  B2N_16(cmd_tbl->nr_of_pre);
-  B2N_16(cmd_tbl->nr_of_post);
-  B2N_16(cmd_tbl->nr_of_cell);
+  ReadBuf16(&b, &cmd_tbl->nr_of_pre);
+  ReadBuf16(&b, &cmd_tbl->nr_of_post);
+  ReadBuf16(&b, &cmd_tbl->nr_of_cell);
+  SkipBuf(&b, 2);
   B2N_16(cmd_tbl->last_byte);
 
   CHECK_VALUE(cmd_tbl->nr_of_pre + cmd_tbl->nr_of_post + cmd_tbl->nr_of_cell<= 255);
@@ -878,34 +886,50 @@ static int ifoRead_PGC_COMMAND_TBL(ifo_handle_t *ifofile,
 
   if(cmd_tbl->nr_of_pre != 0) {
     unsigned int pre_cmds_size  = cmd_tbl->nr_of_pre * COMMAND_DATA_SIZE;
+    char bufpre[pre_cmds_size];
     cmd_tbl->pre_cmds = malloc(pre_cmds_size);
     if(!cmd_tbl->pre_cmds)
       return 0;
 
-    if(!(DVDReadBytes(ifop->file, cmd_tbl->pre_cmds, pre_cmds_size))) {
+    b.wbuf = bufpre;
+    b.buflen = pre_cmds_size;
+
+    if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen))) {
       free(cmd_tbl->pre_cmds);
       return 0;
     }
+
+    for (i=0; i<cmd_tbl->nr_of_pre; i++)
+        ReadBufData(&b, cmd_tbl->pre_cmds[i].bytes, 8);
   }
 
   if(cmd_tbl->nr_of_post != 0) {
     unsigned int post_cmds_size = cmd_tbl->nr_of_post * COMMAND_DATA_SIZE;
+    char bufpost[post_cmds_size];
     cmd_tbl->post_cmds = malloc(post_cmds_size);
     if(!cmd_tbl->post_cmds) {
       if(cmd_tbl->pre_cmds)
         free(cmd_tbl->pre_cmds);
       return 0;
     }
-    if(!(DVDReadBytes(ifop->file, cmd_tbl->post_cmds, post_cmds_size))) {
+
+    b.wbuf = bufpost;
+    b.buflen = post_cmds_size;
+
+    if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen))) {
       if(cmd_tbl->pre_cmds)
         free(cmd_tbl->pre_cmds);
       free(cmd_tbl->post_cmds);
       return 0;
     }
+
+    for (i=0; i<cmd_tbl->nr_of_post; i++)
+        ReadBufData(&b, cmd_tbl->post_cmds[i].bytes, 8);
   }
 
   if(cmd_tbl->nr_of_cell != 0) {
     unsigned int cell_cmds_size = cmd_tbl->nr_of_cell * COMMAND_DATA_SIZE;
+    char bufcell[cell_cmds_size];
     cmd_tbl->cell_cmds = malloc(cell_cmds_size);
     if(!cmd_tbl->cell_cmds) {
       if(cmd_tbl->pre_cmds)
@@ -914,7 +938,11 @@ static int ifoRead_PGC_COMMAND_TBL(ifo_handle_t *ifofile,
         free(cmd_tbl->post_cmds);
       return 0;
     }
-    if(!(DVDReadBytes(ifop->file, cmd_tbl->cell_cmds, cell_cmds_size))) {
+
+    b.wbuf = bufcell;
+    b.buflen = cell_cmds_size;
+
+    if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen))) {
       if(cmd_tbl->pre_cmds)
         free(cmd_tbl->pre_cmds);
       if(cmd_tbl->post_cmds)
@@ -922,6 +950,9 @@ static int ifoRead_PGC_COMMAND_TBL(ifo_handle_t *ifofile,
       free(cmd_tbl->cell_cmds);
       return 0;
     }
+
+    for (i=0; i<cmd_tbl->nr_of_cell; i++)
+        ReadBufData(&b, cmd_tbl->cell_cmds[i].bytes, 8);
   }
 
   /*
