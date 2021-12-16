@@ -1349,7 +1349,9 @@ int ifoRead_VTS_PTT_SRPT(ifo_handle_t *ifofile) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   vts_ptt_srpt_t *vts_ptt_srpt = NULL;
   int info_length, i, j;
-  uint32_t *data = NULL;
+  char *data = NULL;
+  char buf[VTS_PTT_SRPT_SIZE];
+  buf_reader b;
 
   if(!ifofile)
     return 0;
@@ -1371,15 +1373,18 @@ int ifoRead_VTS_PTT_SRPT(ifo_handle_t *ifofile) {
   vts_ptt_srpt->title = NULL;
   ifofile->vts_ptt_srpt = vts_ptt_srpt;
 
-  if(!(DVDReadBytes(ifop->file, vts_ptt_srpt, VTS_PTT_SRPT_SIZE))) {
+  b.wbuf = buf;
+  b.buflen = VTS_PTT_SRPT_SIZE;
+
+  if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen))) {
     Log0(ifop->ctx, "Unable to read PTT search table.");
     goto fail;
   }
 
-  B2N_16(vts_ptt_srpt->nr_of_srpts);
-  B2N_32(vts_ptt_srpt->last_byte);
+  ReadBuf16(&b, &vts_ptt_srpt->nr_of_srpts);
+  SkipZeroBuf(&b, 2);
+  ReadBuf32(&b, &vts_ptt_srpt->last_byte);
 
-  CHECK_ZERO(vts_ptt_srpt->zero_1);
   CHECK_VALUE(vts_ptt_srpt->nr_of_srpts != 0);
   CHECK_VALUE(vts_ptt_srpt->nr_of_srpts < 100); /* ?? */
 
@@ -1388,15 +1393,6 @@ int ifoRead_VTS_PTT_SRPT(ifo_handle_t *ifofile) {
     vts_ptt_srpt->last_byte  = vts_ptt_srpt->nr_of_srpts * sizeof(uint32_t) - 1 + VTS_PTT_SRPT_SIZE;
   }
   info_length = vts_ptt_srpt->last_byte + 1 - VTS_PTT_SRPT_SIZE;
-  data = calloc(1, info_length);
-  if(!data)
-    goto fail;
-
-  if(!(DVDReadBytes(ifop->file, data, info_length))) {
-    Log0(ifop->ctx, "Unable to read PTT search table.");
-    goto fail;
-  }
-
   if(vts_ptt_srpt->nr_of_srpts > info_length / sizeof(uint32_t)) {
     Log0(ifop->ctx, "PTT search table too small.");
     goto fail;
@@ -1407,10 +1403,24 @@ int ifoRead_VTS_PTT_SRPT(ifo_handle_t *ifofile) {
     goto fail;
   }
 
+  vts_ptt_srpt->ttu_offset = calloc(1, info_length);
+  if(!vts_ptt_srpt->ttu_offset)
+    goto fail;
+
+  data = (char*)vts_ptt_srpt->ttu_offset;
+
+  b.wbuf = data;
+  b.buflen = info_length;
+
+  if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen))) {
+    Log0(ifop->ctx, "Unable to read PTT search table.");
+    goto fail;
+  }
+
   for(i = 0; i < vts_ptt_srpt->nr_of_srpts; i++) {
     /* Transformers 3 has PTT start bytes that point outside the SRPT PTT */
-    uint32_t start = data[i];
-    B2N_32(start);
+    uint32_t start;
+    ReadBuf32(&b, &start);
     if(start + PTT_INFO_SIZE > vts_ptt_srpt->last_byte + 1) {
       /* don't mess with any bytes beyond the end of the allocation */
       vts_ptt_srpt->nr_of_srpts = i;
@@ -1423,8 +1433,6 @@ int ifoRead_VTS_PTT_SRPT(ifo_handle_t *ifofile) {
        of the vts_ptt_srpt structure. */
     CHECK_VALUE(data[i] + PTT_INFO_SIZE <= vts_ptt_srpt->last_byte + 1 + 4);
   }
-
-  vts_ptt_srpt->ttu_offset = data;
 
   vts_ptt_srpt->title = calloc(vts_ptt_srpt->nr_of_srpts, sizeof(ttu_t));
   if(!vts_ptt_srpt->title)
@@ -1484,7 +1492,7 @@ int ifoRead_VTS_PTT_SRPT(ifo_handle_t *ifofile) {
   return 1;
 
 fail:
-  free(data);
+  free(vts_ptt_srpt->ttu_offset);
   ifofile->vts_ptt_srpt = NULL;
   free(vts_ptt_srpt->title);
   free(vts_ptt_srpt);
