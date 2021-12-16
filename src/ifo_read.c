@@ -2030,14 +2030,19 @@ static int ifoRead_VOBU_ADMAP_internal(ifo_handle_t *ifofile,
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   unsigned int i;
   int info_length;
+  char buf[VOBU_ADMAP_SIZE];
+  buf_reader b;
 
   if(!DVDFileSeekForce_(ifop->file, sector * DVD_BLOCK_LEN, sector))
     return 0;
 
-  if(!(DVDReadBytes(ifop->file, vobu_admap, VOBU_ADMAP_SIZE)))
+  b.wbuf = buf;
+  b.buflen = VOBU_ADMAP_SIZE;
+
+  if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen)))
     return 0;
 
-  B2N_32(vobu_admap->last_byte);
+  ReadBuf32(&b, &vobu_admap->last_byte);
 
   info_length = vobu_admap->last_byte + 1 - VOBU_ADMAP_SIZE;
   /* assert(info_length > 0);
@@ -2049,15 +2054,19 @@ static int ifoRead_VOBU_ADMAP_internal(ifo_handle_t *ifofile,
   if(!vobu_admap->vobu_start_sectors) {
     return 0;
   }
-  if(info_length &&
-     !(DVDReadBytes(ifop->file,
-                    vobu_admap->vobu_start_sectors, info_length))) {
-    free(vobu_admap->vobu_start_sectors);
-    return 0;
-  }
+  if(info_length)
+  {
+    char bufsect[info_length];
+    b.wbuf = bufsect;
+    b.buflen = info_length;
+    if (!(DVDReadBytes(ifop->file, b.wbuf, b.buflen))) {
+      free(vobu_admap->vobu_start_sectors);
+      return 0;
+    }
 
-  for(i = 0; i < info_length/sizeof(uint32_t); i++)
-    B2N_32(vobu_admap->vobu_start_sectors[i]);
+    for(i = 0; i < info_length/sizeof(uint32_t); i++)
+      ReadBuf32(&b, &vobu_admap->vobu_start_sectors[i]);
+  }
 
   return 1;
 }
