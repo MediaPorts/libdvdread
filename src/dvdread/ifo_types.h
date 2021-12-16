@@ -64,14 +64,14 @@ typedef struct {
   uint8_t minute;
   uint8_t second;
   uint8_t frame_u; /* The two high bits are the frame rate. */
-} ATTRIBUTE_PACKED dvd_time_t;
+} dvd_time_t;
 
 /**
  * Type to store per-command data.
  */
 typedef struct {
   uint8_t bytes[8];
-} ATTRIBUTE_PACKED vm_cmd_t;
+} vm_cmd_t;
 #define COMMAND_DATA_SIZE 8U
 
 
@@ -92,7 +92,7 @@ typedef struct {
   unsigned char picture_size         : 2;
   unsigned char letterboxed          : 1;
   unsigned char film_mode            : 1;
-} ATTRIBUTE_PACKED video_attr_t;
+} video_attr_t;
 #define VIDEO_ATTR_SIZE  2U
 
 /**
@@ -113,20 +113,20 @@ typedef struct {
   uint8_t  code_extension;
   uint8_t unknown3;
   union {
-    struct ATTRIBUTE_PACKED {
+    struct {
       unsigned char unknown4           : 1;
       unsigned char channel_assignment : 3;
       unsigned char version            : 2;
       unsigned char mc_intro           : 1; /* probably 0: true, 1:false */
       unsigned char mode               : 1; /* Karaoke mode 0: solo 1: duet */
     } karaoke;
-    struct ATTRIBUTE_PACKED {
+    struct {
       unsigned char unknown5           : 4;
       unsigned char dolby_encoded      : 1; /* suitable for surround decoding */
       unsigned char unknown6           : 3;
     } surround;
-  } ATTRIBUTE_PACKED app_info;
-} ATTRIBUTE_PACKED audio_attr_t;
+  } app_info;
+} audio_attr_t;
 #define AUDIO_ATTR_SIZE  8U
 
 
@@ -158,7 +158,7 @@ typedef struct {
   unsigned int ach4_gmBe  : 1;
   unsigned int ach4_seBe  : 1;
   uint8_t zero6[19];
-} ATTRIBUTE_PACKED multichannel_ext_t;
+} multichannel_ext_t;
 #define MULTICHANNEL_EXT_SIZE  24U
 
 
@@ -183,7 +183,7 @@ typedef struct {
   uint16_t lang_code;
   uint8_t  lang_extension;
   uint8_t  code_extension;
-} ATTRIBUTE_PACKED subp_attr_t;
+} subp_attr_t;
 #define SUBP_ATTR_SIZE  6U
 
 
@@ -199,7 +199,7 @@ typedef struct {
   vm_cmd_t *pre_cmds;
   vm_cmd_t *post_cmds;
   vm_cmd_t *cell_cmds;
-} ATTRIBUTE_PACKED pgc_command_tbl_t;
+} pgc_command_tbl_t;
 #define PGC_COMMAND_TBL_SIZE 8U
 
 /**
@@ -228,7 +228,7 @@ typedef struct {
   uint32_t first_ilvu_end_sector;
   uint32_t last_vobu_start_sector;
   uint32_t last_sector;
-} ATTRIBUTE_PACKED cell_playback_t;
+} cell_playback_t;
 #define CELL_PLAYBACK_SIZE  24U
 
 #define BLOCK_TYPE_NONE         0x0
@@ -246,7 +246,7 @@ typedef struct {
   uint16_t vob_id_nr;
   uint8_t  zero_1;
   uint8_t  cell_nr;
-} ATTRIBUTE_PACKED cell_position_t;
+} cell_position_t;
 #define CELL_POSITION_SIZE 4U
 
 /**
@@ -282,7 +282,7 @@ typedef struct {
   unsigned int title_play                     : 1;
   unsigned int chapter_search_or_play         : 1;
   unsigned int title_or_time_play             : 1; /* 0 */
-} ATTRIBUTE_PACKED user_ops_t;
+} user_ops_t;
 #define USER_OPS_SIZE  4U
 
 /**
@@ -311,7 +311,7 @@ typedef struct {
   cell_playback_t *cell_playback;
   cell_position_t *cell_position;
   int      ref_count;
-} ATTRIBUTE_PACKED pgc_t;
+} pgc_t;
 #define PGC_SIZE 236U
 
 /**
@@ -325,7 +325,7 @@ typedef struct {
   uint16_t ptl_id_mask;
   uint32_t pgc_start_byte;
   pgc_t *pgc;
-} ATTRIBUTE_PACKED pgci_srp_t;
+} pgci_srp_t;
 #define PGCI_SRP_SIZE 8U
 
 /**
@@ -337,7 +337,7 @@ typedef struct {
   uint32_t last_byte;
   pgci_srp_t *pgci_srp;
   int      ref_count;
-} ATTRIBUTE_PACKED pgcit_t;
+} pgcit_t;
 #define PGCIT_SIZE 8U
 
 /**
@@ -349,7 +349,7 @@ typedef struct {
   uint8_t  exists;
   uint32_t lang_start_byte;
   pgcit_t *pgcit;
-} ATTRIBUTE_PACKED pgci_lu_t;
+} pgci_lu_t;
 #define PGCI_LU_SIZE 8U
 
 /**
@@ -360,7 +360,7 @@ typedef struct {
   uint16_t zero_1;
   uint32_t last_byte;
   pgci_lu_t *lu;
-} ATTRIBUTE_PACKED pgci_ut_t;
+} pgci_ut_t;
 #define PGCI_UT_SIZE 8U
 
 /**
@@ -372,7 +372,7 @@ typedef struct {
   uint8_t  zero_1;
   uint32_t start_sector;
   uint32_t last_sector;
-} ATTRIBUTE_PACKED cell_adr_t;
+} cell_adr_t;
 #define CELL_ADDR_SIZE  12U
 
 /**
@@ -383,7 +383,7 @@ typedef struct {
   uint16_t zero_1;
   uint32_t last_byte;
   cell_adr_t *cell_adr_table;  /* No explicit size given. */
-} ATTRIBUTE_PACKED c_adt_t;
+} c_adt_t;
 #define C_ADT_SIZE 8U
 
 /**
@@ -392,7 +392,7 @@ typedef struct {
 typedef struct {
   uint32_t last_byte;
   uint32_t *vobu_start_sectors;
-} ATTRIBUTE_PACKED vobu_admap_t;
+} vobu_admap_t;
 #define VOBU_ADMAP_SIZE 4U
 
 
@@ -445,7 +445,7 @@ typedef struct {
   uint8_t  nr_of_vmgm_subp_streams; /* should be 0 or 1 */
   subp_attr_t  vmgm_subp_attr;
   subp_attr_t  zero_10[27];  /* XXX: how much 'padding' here? */
-} ATTRIBUTE_PACKED vmgi_mat_t;
+} vmgi_mat_t;
 #define VMGI_MAT_SIZE 510U
 
 typedef struct {
@@ -457,7 +457,7 @@ typedef struct {
   unsigned int jlc_exists_in_tt_dom      : 1;
   unsigned int chapter_search_or_play    : 1; /* UOP 1 */
   unsigned int title_or_time_play        : 1; /* UOP 0 */
-} ATTRIBUTE_PACKED playback_type_t;
+} playback_type_t;
 #define PLAYBACK_TYPE_SIZE 1U
 
 /**
@@ -471,7 +471,7 @@ typedef struct {
   uint8_t  title_set_nr;
   uint8_t  vts_ttn;
   uint32_t title_set_sector;
-} ATTRIBUTE_PACKED title_info_t;
+} title_info_t;
 #define TITLE_INFO_SIZE 12U
 
 /**
@@ -482,7 +482,7 @@ typedef struct {
   uint16_t zero_1;
   uint32_t last_byte;
   title_info_t *title;
-} ATTRIBUTE_PACKED tt_srpt_t;
+} tt_srpt_t;
 #define TT_SRPT_SIZE 8U
 
 
@@ -502,7 +502,7 @@ typedef struct {
   uint16_t pf_ptl_mai_start_byte;
   uint16_t zero_2;
   pf_level_t *pf_ptl_mai; /* table of (nr_of_vtss + 1), video_ts is first */
-} ATTRIBUTE_PACKED ptl_mait_country_t;
+} ptl_mait_country_t;
 #define PTL_MAIT_COUNTRY_SIZE 8U
 
 /**
@@ -513,7 +513,7 @@ typedef struct {
   uint16_t nr_of_vtss;
   uint32_t last_byte;
   ptl_mait_country_t *countries;
-} ATTRIBUTE_PACKED ptl_mait_t;
+} ptl_mait_t;
 #define PTL_MAIT_SIZE 8U
 
 /**
@@ -544,7 +544,7 @@ typedef struct {
   uint8_t  zero_9;
   uint8_t  nr_of_vtstt_subp_streams;
   subp_attr_t vtstt_subp_attr[32];
-} ATTRIBUTE_PACKED vts_attributes_t;
+} vts_attributes_t;
 #define VTS_ATTRIBUTES_SIZE 542U
 #define VTS_ATTRIBUTES_MIN_SIZE 356U
 
@@ -557,7 +557,7 @@ typedef struct {
   uint32_t last_byte;
   vts_attributes_t *vts;
   uint32_t *vts_atrt_offsets; /* offsets table for each vts_attributes */
-} ATTRIBUTE_PACKED vts_atrt_t;
+} vts_atrt_t;
 #define VTS_ATRT_SIZE 8U
 
 /**
@@ -580,7 +580,7 @@ typedef struct {
 
   char text[12]; /* ended by 0x09 */
 #endif
-} ATTRIBUTE_PACKED txtdt_t;
+} txtdt_t;
 
 /**
  * Text Data Language Unit. (Incomplete)
@@ -591,7 +591,7 @@ typedef struct {
   uint8_t char_set;      /* 0x00 reserved Unicode, 0x01 ISO 646, 0x10 JIS Roman & JIS Kanji, 0x11 ISO 8859-1, 0x12 Shift JIS Kanji */
   uint32_t txtdt_start_byte;  /* prt, rel start of vmg_txtdt_mgi  */
   txtdt_t  *txtdt;
-} ATTRIBUTE_PACKED txtdt_lu_t;
+} txtdt_lu_t;
 #define TXTDT_LU_SIZE 8U
 
 /**
@@ -603,7 +603,7 @@ typedef struct {
   uint16_t nr_of_language_units;
   uint32_t last_byte;
   txtdt_lu_t *lu;
-} ATTRIBUTE_PACKED txtdt_mgi_t;
+} txtdt_mgi_t;
 #define TXTDT_MGI_SIZE 20U
 
 
@@ -668,7 +668,7 @@ typedef struct {
   uint16_t zero_21;
   multichannel_ext_t vts_mu_audio_attr[8];
   /* XXX: how much 'padding' here, if any? */
-} ATTRIBUTE_PACKED vtsi_mat_t;
+} vtsi_mat_t;
 #define VTSI_MAT_SIZE 984U
 
 /**
@@ -677,7 +677,7 @@ typedef struct {
 typedef struct {
   uint16_t pgcn;
   uint16_t pgn;
-} ATTRIBUTE_PACKED ptt_info_t;
+} ptt_info_t;
 #define PTT_INFO_SIZE  4U
 
 /**
@@ -686,7 +686,7 @@ typedef struct {
 typedef struct {
   uint16_t nr_of_ptts;
   ptt_info_t *ptt;
-} ATTRIBUTE_PACKED ttu_t;
+} ttu_t;
 
 /**
  * PartOfTitle Search Pointer Table.
@@ -697,7 +697,7 @@ typedef struct {
   uint32_t last_byte;
   ttu_t  *title;
   uint32_t *ttu_offset; /* offset table for each ttu */
-} ATTRIBUTE_PACKED vts_ptt_srpt_t;
+} vts_ptt_srpt_t;
 #define VTS_PTT_SRPT_SIZE 8U
 
 
@@ -715,7 +715,7 @@ typedef struct {
   uint8_t  zero_1;
   uint16_t nr_of_entries;
   map_ent_t *map_ent;
-} ATTRIBUTE_PACKED vts_tmap_t;
+} vts_tmap_t;
 #define VTS_TMAP_SIZE 4U
 
 /**
@@ -727,7 +727,7 @@ typedef struct {
   uint32_t last_byte;
   vts_tmap_t *tmap;
   uint32_t *tmap_offset; /* offset table for each tmap */
-} ATTRIBUTE_PACKED vts_tmapt_t;
+} vts_tmapt_t;
 #define VTS_TMAPT_SIZE 8U
 
 
