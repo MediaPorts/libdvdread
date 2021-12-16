@@ -1032,16 +1032,22 @@ static int ifoRead_CELL_POSITION_TBL(ifo_handle_t *ifofile,
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   unsigned int i;
   unsigned int size = nr * CELL_POSITION_SIZE;
+  char buf[size];
+  buf_reader b;
 
   if(!DVDFileSeek_(ifop->file, offset))
     return 0;
 
-  if(!(DVDReadBytes(ifop->file, cell_position, size)))
+  b.wbuf = buf;
+  b.buflen = size;
+
+  if(!(DVDReadBytes(ifop->file, b.wbuf, b.buflen)))
     return 0;
 
   for(i = 0; i < nr; i++) {
-    B2N_16(cell_position[i].vob_id_nr);
-    CHECK_ZERO(cell_position[i].zero_1);
+    ReadBuf16(&b, &cell_position[i].vob_id_nr);
+    SkipZeroBuf(&b, 1);
+    ReadBuf8(&b, &cell_position[i].cell_nr);
   }
 
   return 1;
