@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <inttypes.h>
 #include <string.h>
+#include <assert.h>
 
 #include "bswap.h"
 #include "dvdread/ifo_types.h"
@@ -116,12 +117,77 @@ static inline int DVDFileSeek_( dvd_file_t *dvd_file, uint32_t offset ) {
   return (DVDFileSeek(dvd_file, (int)offset) == (int)offset);
 }
 
-static void read_video_attr(video_attr_t *va) {
-  getbits_state_t state;
-  uint8_t buf[sizeof(video_attr_t)];
+typedef struct {
+    union {
+        const uint8_t *rbuf;
+        char *wbuf;
+    };
+    size_t buflen;
+} buf_reader;
 
-  memcpy(buf, va, sizeof(video_attr_t));
-  if (!dvdread_getbits_init(&state, buf)) abort();
+static void SkipBuf(buf_reader *b, size_t octets)
+{
+    assert(b->buflen >= octets);
+    b->rbuf += octets;
+    b->buflen -= octets;
+}
+
+#define SkipZeroBuf(b,octets)                                           \
+  assert((b)->buflen >= octets);                                        \
+  if(memcmp(my_friendly_zeros, (b)->rbuf, octets)) {                    \
+    char *dump = makehexdump((b)->rbuf, octets);                        \
+    Log0(ifop->ctx, "Zero check failed in %s:%i : 0x%s",                \
+            __FILE__, __LINE__, dump );                                 \
+    free(dump);                                                         \
+  }                                                                     \
+  SkipBuf(b, octets);
+
+static void ReadBuf64(buf_reader *b, uint64_t *buf64)
+{
+    memcpy(buf64, b->rbuf, 8);
+    SkipBuf(b, 8);
+    B2N_64(*buf64);
+}
+
+static void ReadBuf32(buf_reader *b, uint32_t *buf32)
+{
+    memcpy(buf32, b->rbuf, 4);
+    SkipBuf(b, 4);
+    B2N_32(*buf32);
+}
+
+static void ReadBuf16(buf_reader *b, uint16_t *buf16)
+{
+    memcpy(buf16, b->rbuf, 2);
+    SkipBuf(b, 2);
+    B2N_16(*buf16);
+}
+
+static void ReadBuf8(buf_reader *b, uint8_t *buf8)
+{
+    memcpy(buf8, b->rbuf, 1);
+    SkipBuf(b, 1);
+}
+
+static void ReadBufData(buf_reader *b, void *str, size_t size)
+{
+    assert(b->buflen >= size);
+    memcpy(str, b->rbuf, size);
+    SkipBuf(b, size);
+}
+
+static void ReadBufTime(buf_reader *b, dvd_time_t *time)
+{
+    ReadBuf8(b, &time->hour);
+    ReadBuf8(b, &time->minute);
+    ReadBuf8(b, &time->second);
+    ReadBuf8(b, &time->frame_u);
+}
+
+static void read_video_attr_(buf_reader *b, video_attr_t *va) {
+  getbits_state_t state;
+
+  dvdread_getbits_init(&state, b->rbuf);
   va->mpeg_version = dvdread_getbits(&state, 2);
   va->video_format = dvdread_getbits(&state, 2);
   va->display_aspect_ratio = dvdread_getbits(&state, 2);
@@ -133,14 +199,21 @@ static void read_video_attr(video_attr_t *va) {
   va->picture_size = dvdread_getbits(&state, 2);
   va->letterboxed = dvdread_getbits(&state, 1);
   va->film_mode = dvdread_getbits(&state, 1);
+  SkipBuf(b, VIDEO_ATTR_SIZE);
+}
+static void read_video_attr(video_attr_t *va) {
+  char buf[VIDEO_ATTR_SIZE];
+  buf_reader b;
+  b.wbuf = buf;
+  b.buflen = VIDEO_ATTR_SIZE;
+  memcpy(b.wbuf, va, VIDEO_ATTR_SIZE);
+  read_video_attr_(&b, va);
 }
 
-static void read_audio_attr(audio_attr_t *aa) {
+static void read_audio_attr_(buf_reader *b, audio_attr_t *aa) {
   getbits_state_t state;
-  uint8_t buf[sizeof(audio_attr_t)];
 
-  memcpy(buf, aa, sizeof(audio_attr_t));
-  if (!dvdread_getbits_init(&state, buf)) abort();
+  dvdread_getbits_init(&state, b->rbuf);
   aa->audio_format = dvdread_getbits(&state, 3);
   aa->multichannel_extension = dvdread_getbits(&state, 1);
   aa->lang_type = dvdread_getbits(&state, 2);
@@ -158,14 +231,22 @@ static void read_audio_attr(audio_attr_t *aa) {
   aa->app_info.karaoke.version = dvdread_getbits(&state, 2);
   aa->app_info.karaoke.mc_intro = dvdread_getbits(&state, 1);
   aa->app_info.karaoke.mode = dvdread_getbits(&state, 1);
+  SkipBuf(b, AUDIO_ATTR_SIZE);
+}
+static void read_audio_attr(audio_attr_t *aa) {
+  char buf[AUDIO_ATTR_SIZE];
+  buf_reader b;
+  b.wbuf = buf;
+  b.buflen = AUDIO_ATTR_SIZE;
+  memcpy(b.wbuf, aa, AUDIO_ATTR_SIZE);
+  read_audio_attr_(&b, aa);
 }
 
-static void read_multichannel_ext(multichannel_ext_t *me) {
+static void read_multichannel_ext_(buf_reader *b, struct ifo_handle_private_s *ifop,
+                                  multichannel_ext_t *me) {
   getbits_state_t state;
-  uint8_t buf[sizeof(multichannel_ext_t)];
 
-  memcpy(buf, me, sizeof(multichannel_ext_t));
-  if (!dvdread_getbits_init(&state, buf)) abort();
+  dvdread_getbits_init(&state, b->rbuf);
   me->zero1 = dvdread_getbits(&state, 7);
   me->ach0_gme = dvdread_getbits(&state, 1);
   me->zero2 = dvdread_getbits(&state, 7);
@@ -185,14 +266,22 @@ static void read_multichannel_ext(multichannel_ext_t *me) {
   me->ach4_gv2e = dvdread_getbits(&state, 1);
   me->ach4_gmBe = dvdread_getbits(&state, 1);
   me->ach4_seBe = dvdread_getbits(&state, 1);
+  SkipBuf(b, 5);
+  SkipZeroBuf(b, MULTICHANNEL_EXT_SIZE - 5);
+}
+static void read_multichannel_ext(multichannel_ext_t *me, struct ifo_handle_private_s *ifop) {
+  char buf[MULTICHANNEL_EXT_SIZE];
+  buf_reader b;
+  b.wbuf = buf;
+  b.buflen = MULTICHANNEL_EXT_SIZE;
+  memcpy(b.wbuf, me, MULTICHANNEL_EXT_SIZE);
+  read_multichannel_ext_(&b, ifop, me);
 }
 
-static void read_subp_attr(subp_attr_t *sa) {
+static void read_subp_attr_(buf_reader *b, subp_attr_t *sa) {
   getbits_state_t state;
-  uint8_t buf[sizeof(subp_attr_t)];
 
-  memcpy(buf, sa, sizeof(subp_attr_t));
-  if (!dvdread_getbits_init(&state, buf)) abort();
+  dvdread_getbits_init(&state, b->rbuf);
   sa->code_mode = dvdread_getbits(&state, 3);
   sa->zero1 = dvdread_getbits(&state, 3);
   sa->type = dvdread_getbits(&state, 2);
@@ -200,14 +289,21 @@ static void read_subp_attr(subp_attr_t *sa) {
   sa->lang_code = dvdread_getbits(&state, 16);
   sa->lang_extension = dvdread_getbits(&state, 8);
   sa->code_extension = dvdread_getbits(&state, 8);
+  SkipBuf(b, SUBP_ATTR_SIZE);
+}
+static void read_subp_attr(subp_attr_t *sa) {
+  char buf[SUBP_ATTR_SIZE];
+  buf_reader b;
+  b.wbuf = buf;
+  b.buflen = SUBP_ATTR_SIZE;
+  memcpy(b.wbuf, sa, SUBP_ATTR_SIZE);
+  read_subp_attr_(&b, sa);
 }
 
-static void read_user_ops(user_ops_t *uo) {
+static void read_user_ops_(buf_reader *b, user_ops_t *uo) {
   getbits_state_t state;
-  uint8_t buf[sizeof(user_ops_t)];
 
-  memcpy(buf, uo, sizeof(user_ops_t));
-  if (!dvdread_getbits_init(&state, buf)) abort();
+  dvdread_getbits_init(&state, b->rbuf);
   uo->zero                           = dvdread_getbits(&state, 7);
   uo->video_pres_mode_change         = dvdread_getbits(&state, 1);
   uo->karaoke_audio_pres_mode_change = dvdread_getbits(&state, 1);
@@ -234,28 +330,42 @@ static void read_user_ops(user_ops_t *uo) {
   uo->title_play                     = dvdread_getbits(&state, 1);
   uo->chapter_search_or_play         = dvdread_getbits(&state, 1);
   uo->title_or_time_play             = dvdread_getbits(&state, 1);
+  SkipBuf(b, USER_OPS_SIZE);
+}
+static void read_user_ops(user_ops_t *uo) {
+  char buf[USER_OPS_SIZE];
+  buf_reader b;
+  b.wbuf = buf;
+  b.buflen = USER_OPS_SIZE;
+  memcpy(b.wbuf, uo, USER_OPS_SIZE);
+  read_user_ops_(&b, uo);
 }
 
-static void read_pgci_srp(pgci_srp_t *ps) {
+static void read_pgci_srp_(buf_reader *b, pgci_srp_t *ps) {
   getbits_state_t state;
-  uint8_t buf[sizeof(pgci_srp_t)];
 
-  memcpy(buf, ps, sizeof(pgci_srp_t));
-  if (!dvdread_getbits_init(&state, buf)) abort();
+  dvdread_getbits_init(&state, b->rbuf);
   ps->entry_id                       = dvdread_getbits(&state, 8);
   ps->block_mode                     = dvdread_getbits(&state, 2);
   ps->block_type                     = dvdread_getbits(&state, 2);
   ps->zero_1                         = dvdread_getbits(&state, 4);
   ps->ptl_id_mask                    = dvdread_getbits(&state, 16);
   ps->pgc_start_byte                 = dvdread_getbits(&state, 32);
+  SkipBuf(b, PGCI_SRP_SIZE);
+}
+static void read_pgci_srp(pgci_srp_t *ps) {
+  char buf[PGCI_SRP_SIZE];
+  buf_reader b;
+  b.wbuf = buf;
+  b.buflen = PGCI_SRP_SIZE;
+  memcpy(b.wbuf, ps, PGCI_SRP_SIZE);
+  read_pgci_srp_(&b, ps);
 }
 
-static void read_cell_playback(cell_playback_t *cp) {
+static void read_cell_playback_(buf_reader *b, cell_playback_t *cp) {
   getbits_state_t state;
-  uint8_t buf[sizeof(cell_playback_t)];
 
-  memcpy(buf, cp, sizeof(cell_playback_t));
-  if (!dvdread_getbits_init(&state, buf)) abort();
+  dvdread_getbits_init(&state, b->rbuf);
   cp->block_mode                      = dvdread_getbits(&state, 2);
   cp->block_type                      = dvdread_getbits(&state, 2);
   cp->seamless_play                   = dvdread_getbits(&state, 1);
@@ -278,14 +388,21 @@ static void read_cell_playback(cell_playback_t *cp) {
   cp->first_ilvu_end_sector           = dvdread_getbits(&state, 32);
   cp->last_vobu_start_sector          = dvdread_getbits(&state, 32);
   cp->last_sector                     = dvdread_getbits(&state, 32);
+  SkipBuf(b, CELL_PLAYBACK_SIZE);
+}
+static void read_cell_playback(cell_playback_t *cp) {
+  char buf[CELL_PLAYBACK_SIZE];
+  buf_reader b;
+  b.wbuf = buf;
+  b.buflen = CELL_PLAYBACK_SIZE;
+  memcpy(b.wbuf, cp, CELL_PLAYBACK_SIZE);
+  read_cell_playback_(&b, cp);
 }
 
-static void read_playback_type(playback_type_t *pt) {
+static void read_playback_type_(buf_reader *b, playback_type_t *pt) {
   getbits_state_t state;
-  uint8_t buf[sizeof(playback_type_t)];
 
-  memcpy(buf, pt, sizeof(playback_type_t));
-  if (!dvdread_getbits_init(&state, buf)) abort();
+  dvdread_getbits_init(&state, b->rbuf);
   pt->zero_1                          = dvdread_getbits(&state, 1);
   pt->multi_or_random_pgc_title       = dvdread_getbits(&state, 1);
   pt->jlc_exists_in_cell_cmd          = dvdread_getbits(&state, 1);
@@ -294,6 +411,15 @@ static void read_playback_type(playback_type_t *pt) {
   pt->jlc_exists_in_tt_dom            = dvdread_getbits(&state, 1);
   pt->chapter_search_or_play          = dvdread_getbits(&state, 1);
   pt->title_or_time_play              = dvdread_getbits(&state, 1);
+  SkipBuf(b, PLAYBACK_TYPE_SIZE);
+}
+static void read_playback_type(playback_type_t *pt) {
+  char buf[PLAYBACK_TYPE_SIZE];
+  buf_reader b;
+  b.wbuf = buf;
+  b.buflen = PLAYBACK_TYPE_SIZE;
+  memcpy(b.wbuf, pt, PLAYBACK_TYPE_SIZE);
+  read_playback_type_(&b, pt);
 }
 
 static void free_ptl_mait(ptl_mait_t* ptl_mait, int num_entries) {
@@ -707,7 +833,7 @@ static int ifoRead_VTS(ifo_handle_t *ifofile) {
     CHECK_ZERO(vtsi_mat->vts_subp_attr[i]);
 
   for(i = 0; i < 8; i++) {
-    read_multichannel_ext(&vtsi_mat->vts_mu_audio_attr[i]);
+    read_multichannel_ext(&vtsi_mat->vts_mu_audio_attr[i], ifop);
     CHECK_ZERO0(vtsi_mat->vts_mu_audio_attr[i].zero1);
     CHECK_ZERO0(vtsi_mat->vts_mu_audio_attr[i].zero2);
     CHECK_ZERO0(vtsi_mat->vts_mu_audio_attr[i].zero3);
