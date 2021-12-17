@@ -130,9 +130,39 @@ typedef struct {
     char       buf[VTSI_MAT_SIZE]; /* we never read more than that */
 } fixed_buf_reader;
 
+typedef struct {
+    buf_reader d;
+    char       *buf;
+} dynamic_buf_reader;
+
 static int DVDReadBuffer(dvd_file_t *f, buf_reader *b)
 {
     return DVDReadBytes(f, b->wbuf, b->buflen);
+}
+
+static void ReleaseDynamicBuffer(dynamic_buf_reader *d)
+{
+  assert(d->d.buflen == 0); /* we should have read eveyrthing */
+  free(d->buf);
+}
+
+static int DVDReadDynamicBuffer(dvd_file_t *f, dynamic_buf_reader *d, size_t len)
+{
+  int result;
+  d->d.buflen = len;
+  if (len == 0) {
+    /* reading nothing is OK, as long as we don't use the empty data */
+    d->buf = NULL;
+    return 1;
+  }
+  d->buf = malloc(len);
+  if (d->buf == NULL)
+      return 0;
+  d->d.wbuf = d->buf;
+  result = DVDReadBytes(f, d->d.wbuf, d->d.buflen);
+  if (!result)
+      ReleaseDynamicBuffer(d);
+  return result;
 }
 
 static int DVDReadFixedBuffer(dvd_file_t *f, fixed_buf_reader *r, size_t len)
@@ -830,29 +860,26 @@ static int ifoRead_PGC_COMMAND_TBL(ifo_handle_t *ifofile,
 
   if(cmd_tbl->nr_of_pre != 0) {
     unsigned int pre_cmds_size  = cmd_tbl->nr_of_pre * COMMAND_DATA_SIZE;
-    char bufpre[pre_cmds_size];
-    buf_reader b;
+    dynamic_buf_reader d;
 
     cmd_tbl->pre_cmds = malloc(pre_cmds_size);
     if(!cmd_tbl->pre_cmds)
       return 0;
 
-    b.wbuf = bufpre;
-    b.buflen = pre_cmds_size;
-
-    if(!DVDReadBuffer(ifop->file, &b)) {
+    if(!DVDReadDynamicBuffer(ifop->file, &d, pre_cmds_size)) {
       free(cmd_tbl->pre_cmds);
       return 0;
     }
 
     for (i=0; i<cmd_tbl->nr_of_pre; i++)
-        ReadBufData(&b, cmd_tbl->pre_cmds[i].bytes, 8);
+        ReadBufData(&d.d, cmd_tbl->pre_cmds[i].bytes, 8);
+
+    ReleaseDynamicBuffer(&d);
   }
 
   if(cmd_tbl->nr_of_post != 0) {
     unsigned int post_cmds_size = cmd_tbl->nr_of_post * COMMAND_DATA_SIZE;
-    char bufpost[post_cmds_size];
-    buf_reader b;
+    dynamic_buf_reader d;
 
     cmd_tbl->post_cmds = malloc(post_cmds_size);
     if(!cmd_tbl->post_cmds) {
@@ -861,10 +888,7 @@ static int ifoRead_PGC_COMMAND_TBL(ifo_handle_t *ifofile,
       return 0;
     }
 
-    b.wbuf = bufpost;
-    b.buflen = post_cmds_size;
-
-    if(!DVDReadBuffer(ifop->file, &b)) {
+    if(!DVDReadDynamicBuffer(ifop->file, &d, post_cmds_size)) {
       if(cmd_tbl->pre_cmds)
         free(cmd_tbl->pre_cmds);
       free(cmd_tbl->post_cmds);
@@ -872,13 +896,14 @@ static int ifoRead_PGC_COMMAND_TBL(ifo_handle_t *ifofile,
     }
 
     for (i=0; i<cmd_tbl->nr_of_post; i++)
-        ReadBufData(&b, cmd_tbl->post_cmds[i].bytes, 8);
+        ReadBufData(&d.d, cmd_tbl->post_cmds[i].bytes, 8);
+
+    ReleaseDynamicBuffer(&d);
   }
 
   if(cmd_tbl->nr_of_cell != 0) {
     unsigned int cell_cmds_size = cmd_tbl->nr_of_cell * COMMAND_DATA_SIZE;
-    char bufcell[cell_cmds_size];
-    buf_reader b;
+    dynamic_buf_reader d;
 
     cmd_tbl->cell_cmds = malloc(cell_cmds_size);
     if(!cmd_tbl->cell_cmds) {
@@ -889,10 +914,7 @@ static int ifoRead_PGC_COMMAND_TBL(ifo_handle_t *ifofile,
       return 0;
     }
 
-    b.wbuf = bufcell;
-    b.buflen = cell_cmds_size;
-
-    if(!DVDReadBuffer(ifop->file, &b)) {
+    if(!DVDReadDynamicBuffer(ifop->file, &d, cell_cmds_size)) {
       if(cmd_tbl->pre_cmds)
         free(cmd_tbl->pre_cmds);
       if(cmd_tbl->post_cmds)
@@ -902,7 +924,9 @@ static int ifoRead_PGC_COMMAND_TBL(ifo_handle_t *ifofile,
     }
 
     for (i=0; i<cmd_tbl->nr_of_cell; i++)
-        ReadBufData(&b, cmd_tbl->cell_cmds[i].bytes, 8);
+        ReadBufData(&d.d, cmd_tbl->cell_cmds[i].bytes, 8);
+
+    ReleaseDynamicBuffer(&d);
   }
 
   /*
@@ -928,18 +952,19 @@ static int ifoRead_PGC_PROGRAM_MAP(ifo_handle_t *ifofile,
                                    pgc_program_map_t *program_map,
                                    unsigned int nr, unsigned int offset) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
-  unsigned int size = nr * sizeof(pgc_program_map_t);
-  buf_reader b;
+  unsigned int i;
+  dynamic_buf_reader d;
 
   if(!DVDFileSeek_(ifop->file, offset))
     return 0;
 
-//   static_assert(sizeof(pgc_program_map_t)==1,"odd uint8_t size");
-  b.wbuf = (char*)program_map;
-  b.buflen = size;
-
-  if(!DVDReadBuffer(ifop->file, &b))
+  if(!DVDReadDynamicBuffer(ifop->file, &d, nr * sizeof(pgc_program_map_t)))
     return 0;
+
+  for (i = 0; i <nr; i++)
+    ReadBuf8(&d.d, &program_map[i]);
+
+  ReleaseDynamicBuffer(&d);
 
   return 1;
 }
@@ -949,26 +974,24 @@ static int ifoRead_CELL_PLAYBACK_TBL(ifo_handle_t *ifofile,
                                      unsigned int nr, unsigned int offset) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   unsigned int i;
-  char buf[nr * CELL_PLAYBACK_SIZE];
-  buf_reader b;
+  dynamic_buf_reader d;
 
   if(!DVDFileSeek_(ifop->file, offset))
     return 0;
 
-  b.wbuf = buf;
-  b.buflen = nr * CELL_PLAYBACK_SIZE;
-
-  if(!DVDReadBuffer(ifop->file, &b))
+  if(!DVDReadDynamicBuffer(ifop->file, &d, nr * CELL_PLAYBACK_SIZE))
     return 0;
 
   for(i = 0; i < nr; i++) {
-    read_cell_playback(&b, &cell_playback[i]);
+    read_cell_playback(&d.d, &cell_playback[i]);
     /* Changed < to <= because this was false in the movie 'Pi'. */
     CHECK_VALUE(cell_playback[i].last_vobu_start_sector <=
                 cell_playback[i].last_sector);
     CHECK_VALUE(cell_playback[i].first_sector <=
                 cell_playback[i].last_vobu_start_sector);
   }
+
+  ReleaseDynamicBuffer(&d);
 
   return 1;
 }
@@ -979,24 +1002,21 @@ static int ifoRead_CELL_POSITION_TBL(ifo_handle_t *ifofile,
                                      unsigned int nr, unsigned int offset) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   unsigned int i;
-  unsigned int size = nr * CELL_POSITION_SIZE;
-  char buf[size];
-  buf_reader b;
+  dynamic_buf_reader d;
 
   if(!DVDFileSeek_(ifop->file, offset))
     return 0;
 
-  b.wbuf = buf;
-  b.buflen = size;
-
-  if(!DVDReadBuffer(ifop->file, &b))
+  if(!DVDReadDynamicBuffer(ifop->file, &d, nr * CELL_POSITION_SIZE))
     return 0;
 
   for(i = 0; i < nr; i++) {
-    ReadBuf16(&b, &cell_position[i].vob_id_nr);
-    SkipZeroBuf(&b, 1);
-    ReadBuf8(&b, &cell_position[i].cell_nr);
+    ReadBuf16(&d.d, &cell_position[i].vob_id_nr);
+    SkipZeroBuf(&d.d, 1);
+    ReadBuf8(&d.d, &cell_position[i].cell_nr);
   }
+
+  ReleaseDynamicBuffer(&d);
 
   return 1;
 }
@@ -1172,6 +1192,7 @@ int ifoRead_TT_SRPT(ifo_handle_t *ifofile) {
   unsigned int i;
   size_t info_length;
   fixed_buf_reader r;
+  dynamic_buf_reader d;
 
   if(!ifofile)
     return 0;
@@ -1214,12 +1235,7 @@ int ifoRead_TT_SRPT(ifo_handle_t *ifofile) {
     return 0;
   }
 
-  char titleBuf[info_length];
-  buf_reader b;
-  b.wbuf = titleBuf;
-  b.buflen = info_length;
-
-  if(!DVDReadBuffer(ifop->file, &b)) {
+  if(!DVDReadDynamicBuffer(ifop->file, &d, info_length)) {
     Log0(ifop->ctx, "libdvdread: Unable to read read TT_SRPT.");
     ifoFree_TT_SRPT(ifofile);
     return 0;
@@ -1236,13 +1252,13 @@ int ifoRead_TT_SRPT(ifo_handle_t *ifofile) {
   CHECK_VALUE(tt_srpt->nr_of_srpts * TITLE_INFO_SIZE <= info_length);
 
   for(i = 0; i < tt_srpt->nr_of_srpts; i++) {
-    read_playback_type(&b, &tt_srpt->title[i].pb_ty);
-    ReadBuf8(&b, &tt_srpt->title[i].nr_of_angles);
-    ReadBuf16(&b, &tt_srpt->title[i].nr_of_ptts);
-    ReadBuf16(&b, &tt_srpt->title[i].parental_id);
-    ReadBuf8(&b, &tt_srpt->title[i].title_set_nr);
-    ReadBuf8(&b, &tt_srpt->title[i].vts_ttn);
-    ReadBuf32(&b, &tt_srpt->title[i].title_set_sector);
+    read_playback_type(&d.d, &tt_srpt->title[i].pb_ty);
+    ReadBuf8(&d.d, &tt_srpt->title[i].nr_of_angles);
+    ReadBuf16(&d.d, &tt_srpt->title[i].nr_of_ptts);
+    ReadBuf16(&d.d, &tt_srpt->title[i].parental_id);
+    ReadBuf8(&d.d, &tt_srpt->title[i].title_set_nr);
+    ReadBuf8(&d.d, &tt_srpt->title[i].vts_ttn);
+    ReadBuf32(&d.d, &tt_srpt->title[i].title_set_sector);
     CHECK_VALUE(tt_srpt->title[i].pb_ty.zero_1 == 0);
     CHECK_VALUE(tt_srpt->title[i].nr_of_angles != 0);
     CHECK_VALUE(tt_srpt->title[i].nr_of_angles < 10);
@@ -1255,6 +1271,8 @@ int ifoRead_TT_SRPT(ifo_handle_t *ifofile) {
     CHECK_VALUE(tt_srpt->title[i].vts_ttn < 100); /* ?? */
     /* CHECK_VALUE(tt_srpt->title[i].title_set_sector != 0); */
   }
+
+  ReleaseDynamicBuffer(&d);
 
   /* Make this a function */
 #if 0
@@ -1529,6 +1547,7 @@ int ifoRead_PTL_MAIT(ifo_handle_t *ifofile) {
 
   for(i = 0; i < ptl_mait->nr_of_countries; i++) {
     uint16_t *pf_temp;
+    dynamic_buf_reader d;
 
     if(!DVDFileSeek_(ifop->file,
                      ifofile->vmgi_mat->ptl_mait * DVD_BLOCK_LEN
@@ -1540,30 +1559,20 @@ int ifoRead_PTL_MAIT(ifo_handle_t *ifofile) {
       return 0;
     }
     info_length = (ptl_mait->nr_of_vtss + 1) * sizeof(pf_level_t);
-    pf_temp = calloc(1, info_length);
-    if(!pf_temp) {
-      free_ptl_mait(ptl_mait, i);
-      ifofile->ptl_mait = NULL;
-      return 0;
-    }
 
-    buf_reader b;
-    b.wbuf = pf_temp;
-    b.buflen = info_length;
-
-    if(!DVDReadBuffer(ifop->file, &b)) {
+    if(!DVDReadDynamicBuffer(ifop->file, &d, info_length)) {
       Log0(ifop->ctx, "Unable to read PTL_MAIT table at index %d.",i);
-      free(pf_temp);
       free_ptl_mait(ptl_mait, i);
       ifofile->ptl_mait = NULL;
       return 0;
     }
+    pf_temp = (uint16_t*)d.buf;
     for (j = 0; j < ((ptl_mait->nr_of_vtss + 1U) * 8U); j++) {
       B2N_16(pf_temp[j]);
     }
     ptl_mait->countries[i].pf_ptl_mai = calloc(1, info_length);
     if(!ptl_mait->countries[i].pf_ptl_mai) {
-      free(pf_temp);
+      ReleaseDynamicBuffer(&d);
       free_ptl_mait(ptl_mait, i);
       ifofile->ptl_mait = NULL;
       return 0;
@@ -1576,7 +1585,7 @@ int ifoRead_PTL_MAIT(ifo_handle_t *ifofile) {
             pf_temp[(7-level)*(ptl_mait->nr_of_vtss+1) + vts];
         }
       }
-      free(pf_temp);
+      ReleaseDynamicBuffer(&d);
     }
   }
   return 1;
@@ -1606,6 +1615,7 @@ int ifoRead_VTS_TMAPT(ifo_handle_t *ifofile) {
   int info_length;
   unsigned int i, j;
   fixed_buf_reader r;
+  dynamic_buf_reader d;
 
   if(!ifofile)
     return 0;
@@ -1651,12 +1661,7 @@ int ifoRead_VTS_TMAPT(ifo_handle_t *ifofile) {
 
   vts_tmapt->tmap_offset = vts_tmap_srp;
 
-  char bufsrp[info_length];
-  buf_reader b;
-  b.wbuf = bufsrp;
-  b.buflen = info_length;
-
-  if(!DVDReadBuffer(ifop->file, &b)) {
+  if(!DVDReadDynamicBuffer(ifop->file, &d, info_length)) {
     Log0(ifop->ctx, "Unable to read VTS_TMAPT.");
     free(vts_tmap_srp);
     free(vts_tmapt);
@@ -1665,8 +1670,10 @@ int ifoRead_VTS_TMAPT(ifo_handle_t *ifofile) {
   }
 
   for (i = 0; i < vts_tmapt->nr_of_tmaps; i++) {
-    ReadBuf32(&b, &vts_tmap_srp[i]);
+    ReadBuf32(&d.d, &vts_tmap_srp[i]);
   }
+
+  ReleaseDynamicBuffer(&d);
 
   vts_tmapt->tmap = calloc(vts_tmapt->nr_of_tmaps, sizeof(vts_tmap_t));
   if(!vts_tmapt->tmap) {
@@ -1706,19 +1713,16 @@ int ifoRead_VTS_TMAPT(ifo_handle_t *ifofile) {
       return 0;
     }
 
-    char bufmaps[info_length];
-    buf_reader b;
-    b.wbuf = bufmaps;
-    b.buflen = info_length;
-
-    if(!DVDReadBuffer(ifop->file, &b)) {
+    if(!DVDReadDynamicBuffer(ifop->file, &d, info_length)) {
       Log0(ifop->ctx, "Unable to read VTS_TMAP_ENT.");
       ifoFree_VTS_TMAPT(ifofile);
       return 0;
     }
 
     for(j = 0; j < vts_tmapt->tmap[i].nr_of_entries; j++)
-      ReadBuf32(&b, &vts_tmapt->tmap[i].map_ent[j]);
+      ReadBuf32(&d.d, &vts_tmapt->tmap[i].map_ent[j]);
+
+    ReleaseDynamicBuffer(&d);
   }
 
   return 1;
@@ -1838,22 +1842,19 @@ static int ifoRead_C_ADT_internal(ifo_handle_t *ifofile,
 
   if(info_length)
   {
-    char bufcells[info_length];
-    buf_reader b;
-    b.wbuf = bufcells;
-    b.buflen = info_length;
+    dynamic_buf_reader d;
 
-    if(!DVDReadBuffer(ifop->file, &b)) {
+    if(!DVDReadDynamicBuffer(ifop->file, &d, info_length)) {
       free(c_adt->cell_adr_table);
       return 0;
     }
 
     for(i = 0; i < info_length/CELL_ADDR_SIZE; i++) {
-      ReadBuf16(&b, &c_adt->cell_adr_table[i].vob_id);
-      ReadBuf8(&b, &c_adt->cell_adr_table[i].cell_id);
-      SkipZeroBuf(&b, 1);
-      ReadBuf32(&b, &c_adt->cell_adr_table[i].start_sector);
-      ReadBuf32(&b, &c_adt->cell_adr_table[i].last_sector);
+      ReadBuf16(&d.d, &c_adt->cell_adr_table[i].vob_id);
+      ReadBuf8(&d.d, &c_adt->cell_adr_table[i].cell_id);
+      SkipZeroBuf(&d.d, 1);
+      ReadBuf32(&d.d, &c_adt->cell_adr_table[i].start_sector);
+      ReadBuf32(&d.d, &c_adt->cell_adr_table[i].last_sector);
 
       CHECK_VALUE(c_adt->cell_adr_table[i].vob_id > 0);
       CHECK_VALUE(c_adt->cell_adr_table[i].vob_id <= c_adt->nr_of_vobs);
@@ -1861,6 +1862,8 @@ static int ifoRead_C_ADT_internal(ifo_handle_t *ifofile,
       CHECK_VALUE(c_adt->cell_adr_table[i].start_sector <
                   c_adt->cell_adr_table[i].last_sector);
     }
+
+    ReleaseDynamicBuffer(&d);
   }
 
   return 1;
@@ -1973,17 +1976,17 @@ static int ifoRead_VOBU_ADMAP_internal(ifo_handle_t *ifofile,
   }
   if(info_length)
   {
-    char bufsect[info_length];
-    buf_reader b;
-    b.wbuf = bufsect;
-    b.buflen = info_length;
-    if (!(DVDReadBuffer(ifop->file, &b))) {
+    dynamic_buf_reader d;
+
+    if (!(DVDReadDynamicBuffer(ifop->file, &d, info_length))) {
       free(vobu_admap->vobu_start_sectors);
       return 0;
     }
 
     for(i = 0; i < info_length/sizeof(uint32_t); i++)
-      ReadBuf32(&b, &vobu_admap->vobu_start_sectors[i]);
+      ReadBuf32(&d.d, &vobu_admap->vobu_start_sectors[i]);
+
+    ReleaseDynamicBuffer(&d);
   }
 
   return 1;
@@ -2054,8 +2057,8 @@ static int ifoRead_PGCIT_internal(ifo_handle_t *ifofile, pgcit_t *pgcit,
                                   unsigned int offset) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   int i, info_length;
-  char *data;
   fixed_buf_reader r;
+  dynamic_buf_reader d;
 
   if(!DVDFileSeek_(ifop->file, offset))
     return 0;
@@ -2078,29 +2081,20 @@ static int ifoRead_PGCIT_internal(ifo_handle_t *ifofile, pgcit_t *pgcit,
   }
 
   info_length = pgcit->nr_of_pgci_srp * PGCI_SRP_SIZE;
-  data = calloc(1, info_length);
-  if(!data)
-    return 0;
 
-  buf_reader b;
-  b.wbuf = data;
-  b.buflen = info_length;
-
-  if(info_length && !(DVDReadBuffer(ifop->file, &b))) {
-    free(data);
+  if(!(DVDReadDynamicBuffer(ifop->file, &d, info_length)))
     return 0;
-  }
 
   pgcit->pgci_srp = calloc(pgcit->nr_of_pgci_srp, sizeof(pgci_srp_t));
   if(!pgcit->pgci_srp) {
-    free(data);
+    ReleaseDynamicBuffer(&d);
     return 0;
   }
   for(i = 0; i < pgcit->nr_of_pgci_srp; i++) {
-    read_pgci_srp(&b, &pgcit->pgci_srp[i]);
+    read_pgci_srp(&d.d, &pgcit->pgci_srp[i]);
     CHECK_VALUE(pgcit->pgci_srp[i].zero_1 == 0);
   }
-  free(data);
+  ReleaseDynamicBuffer(&d);
 
   for(i = 0; i < pgcit->nr_of_pgci_srp; i++)
     CHECK_VALUE(pgcit->pgci_srp[i].pgc_start_byte + PGC_SIZE <= pgcit->last_byte+1);
@@ -2177,8 +2171,8 @@ int ifoRead_PGCI_UT(ifo_handle_t *ifofile) {
   unsigned int sector;
   unsigned int i;
   int info_length;
-  char *data;
   fixed_buf_reader r;
+  dynamic_buf_reader d;
 
   if(!ifofile)
     return 0;
@@ -2222,19 +2216,7 @@ int ifoRead_PGCI_UT(ifo_handle_t *ifofile) {
   CHECK_VALUE((uint32_t)pgci_ut->nr_of_lus * PGCI_LU_SIZE < pgci_ut->last_byte);
 
   info_length = pgci_ut->nr_of_lus * PGCI_LU_SIZE;
-  data = calloc(1, info_length);
-  if(!data) {
-    free(pgci_ut);
-    ifofile->pgci_ut = NULL;
-    return 0;
-  }
-
-  buf_reader b;
-  b.wbuf = data;
-  b.buflen = info_length;
-
-  if(!DVDReadBuffer(ifop->file, &b)) {
-    free(data);
+  if(!DVDReadDynamicBuffer(ifop->file, &d, info_length)) {
     free(pgci_ut);
     ifofile->pgci_ut = NULL;
     return 0;
@@ -2242,18 +2224,18 @@ int ifoRead_PGCI_UT(ifo_handle_t *ifofile) {
 
   pgci_ut->lu = calloc(pgci_ut->nr_of_lus, sizeof(pgci_lu_t));
   if(!pgci_ut->lu) {
-    free(data);
+    ReleaseDynamicBuffer(&d);
     free(pgci_ut);
     ifofile->pgci_ut = NULL;
     return 0;
   }
   for(i = 0; i < pgci_ut->nr_of_lus; i++) {
-    ReadBuf16(&b, &pgci_ut->lu[i].lang_code);
-    ReadBuf8(&b, &pgci_ut->lu[i].lang_extension);
-    ReadBuf8(&b, &pgci_ut->lu[i].exists);
-    ReadBuf32(&b, &pgci_ut->lu[i].lang_start_byte);
+    ReadBuf16(&d.d, &pgci_ut->lu[i].lang_code);
+    ReadBuf8(&d.d, &pgci_ut->lu[i].lang_extension);
+    ReadBuf8(&d.d, &pgci_ut->lu[i].exists);
+    ReadBuf32(&d.d, &pgci_ut->lu[i].lang_start_byte);
   }
-  free(data);
+  ReleaseDynamicBuffer(&d);
 
   for(i = 0; i < pgci_ut->nr_of_lus; i++) {
     /* Maybe this is only defined for v1.1 and later titles? */
@@ -2389,6 +2371,7 @@ int ifoRead_VTS_ATRT(ifo_handle_t *ifofile) {
   vts_atrt_t *vts_atrt;
   unsigned int i, info_length, sector;
   fixed_buf_reader r;
+  dynamic_buf_reader d;
 
   if(!ifofile)
     return 0;
@@ -2425,7 +2408,6 @@ int ifoRead_VTS_ATRT(ifo_handle_t *ifofile) {
               VTS_ATRT_SIZE < vts_atrt->last_byte + 1);
 
   info_length = vts_atrt->nr_of_vtss * sizeof(uint32_t);
-  char bufoff[info_length];
 
   vts_atrt->vts_atrt_offsets = calloc(vts_atrt->nr_of_vtss, sizeof(uint32_t));
   if(!vts_atrt->vts_atrt_offsets) {
@@ -2434,11 +2416,7 @@ int ifoRead_VTS_ATRT(ifo_handle_t *ifofile) {
     return 0;
   }
 
-  buf_reader b;
-  b.wbuf = bufoff;
-  b.buflen = info_length;
-
-  if(!DVDReadBuffer(ifop->file, &b)) {
+  if(!DVDReadDynamicBuffer(ifop->file, &d, info_length)) {
     free(vts_atrt->vts_atrt_offsets);
     free(vts_atrt);
     ifofile->vts_atrt = NULL;
@@ -2446,9 +2424,11 @@ int ifoRead_VTS_ATRT(ifo_handle_t *ifofile) {
   }
 
   for(i = 0; i < vts_atrt->nr_of_vtss; i++) {
-    ReadBuf32(&b, &vts_atrt->vts_atrt_offsets[i]);
+    ReadBuf32(&d.d, &vts_atrt->vts_atrt_offsets[i]);
     CHECK_VALUE(vts_atrt->vts_atrt_offsets[i] + VTS_ATTRIBUTES_MIN_SIZE < vts_atrt->last_byte + 1);
   }
+
+  ReleaseDynamicBuffer(&d);
 
   info_length = vts_atrt->nr_of_vtss * sizeof(vts_attributes_t);
   vts_atrt->vts = calloc(1, info_length);
