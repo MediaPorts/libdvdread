@@ -135,11 +135,6 @@ typedef struct {
     char       *buf;
 } dynamic_buf_reader;
 
-static int DVDReadBuffer(dvd_file_t *f, buf_reader *b)
-{
-    return DVDReadBytes(f, b->wbuf, b->buflen);
-}
-
 static void ReleaseDynamicBuffer(dynamic_buf_reader *d)
 {
   assert(d->d.buflen == 0); /* we should have read eveyrthing */
@@ -1308,8 +1303,8 @@ int ifoRead_VTS_PTT_SRPT(ifo_handle_t *ifofile) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   vts_ptt_srpt_t *vts_ptt_srpt = NULL;
   int info_length, i, j;
-  char *data = NULL;
   fixed_buf_reader r;
+  dynamic_buf_reader d;
 
   if(!ifofile)
     return 0;
@@ -1362,13 +1357,7 @@ int ifoRead_VTS_PTT_SRPT(ifo_handle_t *ifofile) {
   if(!vts_ptt_srpt->ttu_offset)
     goto fail;
 
-  data = (char*)vts_ptt_srpt->ttu_offset;
-
-  buf_reader b;
-  b.wbuf = data;
-  b.buflen = info_length;
-
-  if(!DVDReadBuffer(ifop->file, &b)) {
+  if(!DVDReadDynamicBuffer(ifop->file, &d, info_length)) {
     Log0(ifop->ctx, "Unable to read PTT search table.");
     goto fail;
   }
@@ -1376,18 +1365,18 @@ int ifoRead_VTS_PTT_SRPT(ifo_handle_t *ifofile) {
   for(i = 0; i < vts_ptt_srpt->nr_of_srpts; i++) {
     /* Transformers 3 has PTT start bytes that point outside the SRPT PTT */
     uint32_t start;
-    ReadBuf32(&b, &start);
+    ReadBuf32(&d.d, &start);
     if(start + PTT_INFO_SIZE > vts_ptt_srpt->last_byte + 1) {
       /* don't mess with any bytes beyond the end of the allocation */
       vts_ptt_srpt->nr_of_srpts = i;
       break;
     }
-    data[i] = start;
-    /* assert(data[i] + PTT_INFO_SIZE <= vts_ptt_srpt->last_byte + 1);
+    vts_ptt_srpt->ttu_offset[i] = start;
+    /* assert(vts_ptt_srpt->ttu_offset[i] + PTT_INFO_SIZE <= vts_ptt_srpt->last_byte + 1);
        Magic Knight Rayearth Daybreak is mastered very strange and has
-       Titles with 0 PTTs. They all have a data[i] offsets beyond the end of
+       Titles with 0 PTTs. They all have a vts_ptt_srpt->ttu_offset[i] offsets beyond the end of
        of the vts_ptt_srpt structure. */
-    CHECK_VALUE(data[i] + PTT_INFO_SIZE <= vts_ptt_srpt->last_byte + 1 + 4);
+    CHECK_VALUE(start + PTT_INFO_SIZE <= vts_ptt_srpt->last_byte + 1 + 4);
   }
 
   vts_ptt_srpt->title = calloc(vts_ptt_srpt->nr_of_srpts, sizeof(ttu_t));
@@ -1397,9 +1386,9 @@ int ifoRead_VTS_PTT_SRPT(ifo_handle_t *ifofile) {
   for(i = 0; i < vts_ptt_srpt->nr_of_srpts; i++) {
     int n;
     if(i < vts_ptt_srpt->nr_of_srpts - 1)
-      n = (data[i+1] - data[i]);
+      n = vts_ptt_srpt->ttu_offset[i+1] - vts_ptt_srpt->ttu_offset[i];
     else
-      n = (vts_ptt_srpt->last_byte + 1 - data[i]);
+      n = vts_ptt_srpt->last_byte + 1 - vts_ptt_srpt->ttu_offset[i];
 
     /* assert(n > 0 && (n % 4) == 0);
        Magic Knight Rayearth Daybreak is mastered very strange and has
@@ -1419,20 +1408,13 @@ int ifoRead_VTS_PTT_SRPT(ifo_handle_t *ifofile) {
     }
     for(j = 0; j < vts_ptt_srpt->title[i].nr_of_ptts; j++) {
       /* The assert placed here because of Magic Knight Rayearth Daybreak */
-      CHECK_VALUE(data[i] + PTT_INFO_SIZE <= vts_ptt_srpt->last_byte + 1);
-      vts_ptt_srpt->title[i].ptt[j].pgcn
-        = *(uint16_t*)(((char *)data) + data[i] + 4*j - VTS_PTT_SRPT_SIZE);
-      vts_ptt_srpt->title[i].ptt[j].pgn
-        = *(uint16_t*)(((char *)data) + data[i] + 4*j + 2 - VTS_PTT_SRPT_SIZE);
+      CHECK_VALUE(vts_ptt_srpt->ttu_offset[i] + PTT_INFO_SIZE <= vts_ptt_srpt->last_byte + 1);
+      ReadBuf16(&d.d, &vts_ptt_srpt->title[i].ptt[j].pgcn);
+      ReadBuf16(&d.d, &vts_ptt_srpt->title[i].ptt[j].pgn);
     }
   }
 
-  for(i = 0; i < vts_ptt_srpt->nr_of_srpts; i++) {
-    for(j = 0; j < vts_ptt_srpt->title[i].nr_of_ptts; j++) {
-      B2N_16(vts_ptt_srpt->title[i].ptt[j].pgcn);
-      B2N_16(vts_ptt_srpt->title[i].ptt[j].pgn);
-    }
-  }
+  ReleaseDynamicBuffer(&d);
 
   for(i = 0; i < vts_ptt_srpt->nr_of_srpts; i++) {
     CHECK_VALUE(vts_ptt_srpt->title[i].nr_of_ptts < 1000); /* ?? */
