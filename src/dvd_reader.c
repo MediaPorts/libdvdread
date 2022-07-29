@@ -330,7 +330,8 @@ static char *bsd_block2char( const char *path )
 static dvd_reader_t *DVDOpenCommon( void *priv,
                                     const dvd_logger_cb *logcb,
                                     const char *ppath,
-                                    dvd_reader_stream_cb *stream_cb )
+                                    dvd_reader_stream_cb *stream_cb,
+                                    dvd_reader_filesystem_h * fs )
 {
   dvdstat_t fileinfo;
   int ret, have_css, cdir = -1;
@@ -344,6 +345,21 @@ static dvd_reader_t *DVDOpenCommon( void *priv,
   if(logcb)
     ctx->logcb = *logcb;
 
+  // open files using the provided filesystem implementation
+  if (fs != NULL && ppath != NULL)
+  {
+    ctx->fs = fs;
+    dvdinput_setup_builtin(ctx->priv, &ctx->logcb);
+    ctx->rd = DVDOpenPath(ppath);
+    if (!ctx->rd)
+    {
+      free(ctx);
+      return NULL;
+    }
+    return ctx;
+  }
+
+  // create the internal filesystem
   ctx->fs = InitInternalFilesystem();
   if (!ctx->fs)
   {
@@ -629,25 +645,31 @@ DVDOpen_error:
 
 dvd_reader_t *DVDOpen( const char *ppath )
 {
-    return DVDOpenCommon( NULL, NULL, ppath, NULL );
+    return DVDOpenCommon( NULL, NULL, ppath, NULL, NULL );
 }
 
 dvd_reader_t *DVDOpenStream( void *stream,
                              dvd_reader_stream_cb *stream_cb )
 {
-    return DVDOpenCommon( stream, NULL, NULL, stream_cb );
+    return DVDOpenCommon( stream, NULL, NULL, stream_cb, NULL );
 }
 
 dvd_reader_t *DVDOpen2( void *priv, const dvd_logger_cb *logcb,
                         const char *ppath )
 {
-    return DVDOpenCommon( priv, logcb, ppath, NULL );
+    return DVDOpenCommon( priv, logcb, ppath, NULL, NULL );
 }
 
 dvd_reader_t *DVDOpenStream2( void *priv, const dvd_logger_cb *logcb,
                               dvd_reader_stream_cb *stream_cb )
 {
-    return DVDOpenCommon( priv, logcb, NULL, stream_cb );
+    return DVDOpenCommon( priv, logcb, NULL, stream_cb, NULL );
+}
+
+dvd_reader_t *DVDOpenFiles( void *priv, const dvd_logger_cb *logcb,
+                              const char *ppath, dvd_reader_filesystem_h *fs)
+{
+    return DVDOpenCommon( priv, logcb, ppath, NULL, fs);
 }
 
 void DVDClose( dvd_reader_t *dvd )
