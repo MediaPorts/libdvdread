@@ -27,11 +27,12 @@
 
 #include "dvdread/bitreader.h"
 
-int dvdread_getbits_init(getbits_state_t *state, const uint8_t *start) {
+int dvdread_getbits_init(getbits_state_t *state, const uint8_t *start, size_t size) {
   if ((state == NULL) || (start == NULL)) return 0;
   state->start = start;
   state->bit_position = 0;
   state->byte_position = 0;
+  state->size = size;
   return 1;
 }
 
@@ -47,6 +48,7 @@ uint32_t dvdread_getbits(getbits_state_t *state, uint32_t number_of_bits) {
 
   if ((state->bit_position) > 0) {  /* Last getbits left us in the middle of a byte. */
     if (number_of_bits > (8-state->bit_position)) { /* this getbits will span 2 or more bytes. */
+     if (state->byte_position >= state->size) abort();
       byte = state->start[state->byte_position] << state->bit_position;
       byte = byte >> (state->bit_position);
       result = byte;
@@ -54,6 +56,7 @@ uint32_t dvdread_getbits(getbits_state_t *state, uint32_t number_of_bits) {
       state->bit_position = 0;
       state->byte_position++;
     } else {
+      if (state->byte_position >= state->size) abort();
       byte = state->start[state->byte_position] << state->bit_position;
       byte = byte >> (8 - number_of_bits);
       result = byte;
@@ -67,11 +70,13 @@ uint32_t dvdread_getbits(getbits_state_t *state, uint32_t number_of_bits) {
   }
   if ((state->bit_position) == 0) {
     while (number_of_bits > 7) {
+      if (state->byte_position >= state->size) abort();
       result = (result << 8) + state->start[state->byte_position];
       state->byte_position++;
       number_of_bits -= 8;
     }
     if (number_of_bits > 0) { /* number_of_bits < 8 */
+     if (state->byte_position >= state->size) abort();
       byte = state->start[state->byte_position] << state->bit_position;
       state->bit_position += number_of_bits; /* Here it is impossible for bit_position > 7 */
       byte = byte >> (8 - number_of_bits);
