@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <inttypes.h>
 #include <string.h>
+#include <assert.h>
 
 #include "bswap.h"
 #include "dvdread/ifo_types.h"
@@ -116,12 +117,120 @@ static inline int DVDFileSeek_( dvd_file_t *dvd_file, uint32_t offset ) {
   return (DVDFileSeek(dvd_file, (int)offset) == (int)offset);
 }
 
-static void read_video_attr(video_attr_t *va) {
-  getbits_state_t state;
-  uint8_t buf[sizeof(video_attr_t)];
+typedef struct {
+    union {
+        const uint8_t *rbuf;
+        char *wbuf;
+    };
+    size_t buflen;
+} buf_reader;
 
-  memcpy(buf, va, sizeof(video_attr_t));
-  if (!dvdread_getbits_init(&state, buf)) abort();
+typedef struct {
+    buf_reader r;
+    char       buf[VTSI_MAT_SIZE]; /* we never read more than that */
+} fixed_buf_reader;
+
+typedef struct {
+    buf_reader d;
+    char       *buf;
+} dynamic_buf_reader;
+
+static void ReleaseDynamicBuffer(dynamic_buf_reader *d)
+{
+  assert(d->d.buflen == 0); /* we should have read eveyrthing */
+  free(d->buf);
+}
+
+static int DVDReadDynamicBuffer(dvd_file_t *f, dynamic_buf_reader *d, size_t len)
+{
+  int result;
+  d->d.buflen = len;
+  if (len == 0) {
+    /* reading nothing is OK, as long as we don't use the empty data */
+    d->buf = NULL;
+    return 1;
+  }
+  d->buf = malloc(len);
+  if (d->buf == NULL)
+      return 0;
+  d->d.wbuf = d->buf;
+  result = DVDReadBytes(f, d->d.wbuf, d->d.buflen);
+  if (!result)
+      ReleaseDynamicBuffer(d);
+  return result;
+}
+
+static int DVDReadFixedBuffer(dvd_file_t *f, fixed_buf_reader *r, size_t len)
+{
+    assert(len <= sizeof(r->buf));
+    r->r.wbuf = r->buf;
+    r->r.buflen = len;
+    return DVDReadBytes(f, r->r.wbuf, r->r.buflen);
+}
+
+static void SkipBuf(buf_reader *b, size_t octets)
+{
+    assert(b->buflen >= octets);
+    b->rbuf += octets;
+    b->buflen -= octets;
+}
+
+#define SkipZeroBuf(b,octets)                                           \
+  assert((b)->buflen >= octets);                                        \
+  if(memcmp(my_friendly_zeros, (b)->rbuf, octets)) {                    \
+    char *dump = makehexdump((b)->rbuf, octets);                        \
+    Log0(ifop->ctx, "Zero check failed in %s:%i : 0x%s",                \
+            __FILE__, __LINE__, dump );                                 \
+    free(dump);                                                         \
+  }                                                                     \
+  SkipBuf(b, octets);
+
+static void ReadBuf64(buf_reader *b, uint64_t *buf64)
+{
+    memcpy(buf64, b->rbuf, 8);
+    SkipBuf(b, 8);
+    B2N_64(*buf64);
+}
+
+static void ReadBuf32(buf_reader *b, uint32_t *buf32)
+{
+    memcpy(buf32, b->rbuf, 4);
+    SkipBuf(b, 4);
+    B2N_32(*buf32);
+}
+
+static void ReadBuf16(buf_reader *b, uint16_t *buf16)
+{
+    memcpy(buf16, b->rbuf, 2);
+    SkipBuf(b, 2);
+    B2N_16(*buf16);
+}
+
+static void ReadBuf8(buf_reader *b, uint8_t *buf8)
+{
+    memcpy(buf8, b->rbuf, 1);
+    SkipBuf(b, 1);
+}
+
+static void ReadBufData(buf_reader *b, void *str, size_t size)
+{
+    assert(b->buflen >= size);
+    memcpy(str, b->rbuf, size);
+    SkipBuf(b, size);
+}
+
+static void ReadBufTime(buf_reader *b, dvd_time_t *time)
+{
+    ReadBuf8(b, &time->hour);
+    ReadBuf8(b, &time->minute);
+    ReadBuf8(b, &time->second);
+    ReadBuf8(b, &time->frame_u);
+}
+
+static void read_video_attr(buf_reader *b, video_attr_t *va) {
+  getbits_state_t state;
+
+  dvdread_getbits_init(&state, b->rbuf);
   va->mpeg_version = dvdread_getbits(&state, 2);
   va->video_format = dvdread_getbits(&state, 2);
   va->display_aspect_ratio = dvdread_getbits(&state, 2);
@@ -133,14 +242,13 @@ static void read_video_attr(video_attr_t *va) {
   va->picture_size = dvdread_getbits(&state, 2);
   va->letterboxed = dvdread_getbits(&state, 1);
   va->film_mode = dvdread_getbits(&state, 1);
+  SkipBuf(b, VIDEO_ATTR_SIZE);
 }
 
-static void read_audio_attr(audio_attr_t *aa) {
+static void read_audio_attr(buf_reader *b, audio_attr_t *aa) {
   getbits_state_t state;
-  uint8_t buf[sizeof(audio_attr_t)];
 
-  memcpy(buf, aa, sizeof(audio_attr_t));
-  if (!dvdread_getbits_init(&state, buf)) abort();
+  dvdread_getbits_init(&state, b->rbuf);
   aa->audio_format = dvdread_getbits(&state, 3);
   aa->multichannel_extension = dvdread_getbits(&state, 1);
   aa->lang_type = dvdread_getbits(&state, 2);
@@ -158,14 +266,14 @@ static void read_audio_attr(audio_attr_t *aa) {
   aa->app_info.karaoke.version = dvdread_getbits(&state, 2);
   aa->app_info.karaoke.mc_intro = dvdread_getbits(&state, 1);
   aa->app_info.karaoke.mode = dvdread_getbits(&state, 1);
+  SkipBuf(b, AUDIO_ATTR_SIZE);
 }
 
-static void read_multichannel_ext(multichannel_ext_t *me) {
+static void read_multichannel_ext(buf_reader *b, struct ifo_handle_private_s *ifop,
+                                  multichannel_ext_t *me) {
   getbits_state_t state;
-  uint8_t buf[sizeof(multichannel_ext_t)];
 
-  memcpy(buf, me, sizeof(multichannel_ext_t));
-  if (!dvdread_getbits_init(&state, buf)) abort();
+  dvdread_getbits_init(&state, b->rbuf);
   me->zero1 = dvdread_getbits(&state, 7);
   me->ach0_gme = dvdread_getbits(&state, 1);
   me->zero2 = dvdread_getbits(&state, 7);
@@ -185,14 +293,14 @@ static void read_multichannel_ext(multichannel_ext_t *me) {
   me->ach4_gv2e = dvdread_getbits(&state, 1);
   me->ach4_gmBe = dvdread_getbits(&state, 1);
   me->ach4_seBe = dvdread_getbits(&state, 1);
+  SkipBuf(b, 5);
+  SkipZeroBuf(b, MULTICHANNEL_EXT_SIZE - 5);
 }
 
-static void read_subp_attr(subp_attr_t *sa) {
+static void read_subp_attr(buf_reader *b, subp_attr_t *sa) {
   getbits_state_t state;
-  uint8_t buf[sizeof(subp_attr_t)];
 
-  memcpy(buf, sa, sizeof(subp_attr_t));
-  if (!dvdread_getbits_init(&state, buf)) abort();
+  dvdread_getbits_init(&state, b->rbuf);
   sa->code_mode = dvdread_getbits(&state, 3);
   sa->zero1 = dvdread_getbits(&state, 3);
   sa->type = dvdread_getbits(&state, 2);
@@ -200,14 +308,13 @@ static void read_subp_attr(subp_attr_t *sa) {
   sa->lang_code = dvdread_getbits(&state, 16);
   sa->lang_extension = dvdread_getbits(&state, 8);
   sa->code_extension = dvdread_getbits(&state, 8);
+  SkipBuf(b, SUBP_ATTR_SIZE);
 }
 
-static void read_user_ops(user_ops_t *uo) {
+static void read_user_ops(buf_reader *b, user_ops_t *uo) {
   getbits_state_t state;
-  uint8_t buf[sizeof(user_ops_t)];
 
-  memcpy(buf, uo, sizeof(user_ops_t));
-  if (!dvdread_getbits_init(&state, buf)) abort();
+  dvdread_getbits_init(&state, b->rbuf);
   uo->zero                           = dvdread_getbits(&state, 7);
   uo->video_pres_mode_change         = dvdread_getbits(&state, 1);
   uo->karaoke_audio_pres_mode_change = dvdread_getbits(&state, 1);
@@ -234,28 +341,26 @@ static void read_user_ops(user_ops_t *uo) {
   uo->title_play                     = dvdread_getbits(&state, 1);
   uo->chapter_search_or_play         = dvdread_getbits(&state, 1);
   uo->title_or_time_play             = dvdread_getbits(&state, 1);
+  SkipBuf(b, USER_OPS_SIZE);
 }
 
-static void read_pgci_srp(pgci_srp_t *ps) {
+static void read_pgci_srp(buf_reader *b, pgci_srp_t *ps) {
   getbits_state_t state;
-  uint8_t buf[sizeof(pgci_srp_t)];
 
-  memcpy(buf, ps, sizeof(pgci_srp_t));
-  if (!dvdread_getbits_init(&state, buf)) abort();
+  dvdread_getbits_init(&state, b->rbuf);
   ps->entry_id                       = dvdread_getbits(&state, 8);
   ps->block_mode                     = dvdread_getbits(&state, 2);
   ps->block_type                     = dvdread_getbits(&state, 2);
   ps->zero_1                         = dvdread_getbits(&state, 4);
   ps->ptl_id_mask                    = dvdread_getbits(&state, 16);
   ps->pgc_start_byte                 = dvdread_getbits(&state, 32);
+  SkipBuf(b, PGCI_SRP_SIZE);
 }
 
-static void read_cell_playback(cell_playback_t *cp) {
+static void read_cell_playback(buf_reader *b, cell_playback_t *cp) {
   getbits_state_t state;
-  uint8_t buf[sizeof(cell_playback_t)];
 
-  memcpy(buf, cp, sizeof(cell_playback_t));
-  if (!dvdread_getbits_init(&state, buf)) abort();
+  dvdread_getbits_init(&state, b->rbuf);
   cp->block_mode                      = dvdread_getbits(&state, 2);
   cp->block_type                      = dvdread_getbits(&state, 2);
   cp->seamless_play                   = dvdread_getbits(&state, 1);
@@ -278,14 +383,13 @@ static void read_cell_playback(cell_playback_t *cp) {
   cp->first_ilvu_end_sector           = dvdread_getbits(&state, 32);
   cp->last_vobu_start_sector          = dvdread_getbits(&state, 32);
   cp->last_sector                     = dvdread_getbits(&state, 32);
+  SkipBuf(b, CELL_PLAYBACK_SIZE);
 }
 
-static void read_playback_type(playback_type_t *pt) {
+static void read_playback_type(buf_reader *b, playback_type_t *pt) {
   getbits_state_t state;
-  uint8_t buf[sizeof(playback_type_t)];
 
-  memcpy(buf, pt, sizeof(playback_type_t));
-  if (!dvdread_getbits_init(&state, buf)) abort();
+  dvdread_getbits_init(&state, b->rbuf);
   pt->zero_1                          = dvdread_getbits(&state, 1);
   pt->multi_or_random_pgc_title       = dvdread_getbits(&state, 1);
   pt->jlc_exists_in_cell_cmd          = dvdread_getbits(&state, 1);
@@ -294,6 +398,7 @@ static void read_playback_type(playback_type_t *pt) {
   pt->jlc_exists_in_tt_dom            = dvdread_getbits(&state, 1);
   pt->chapter_search_or_play          = dvdread_getbits(&state, 1);
   pt->title_or_time_play              = dvdread_getbits(&state, 1);
+  SkipBuf(b, PLAYBACK_TYPE_SIZE);
 }
 
 static void free_ptl_mait(ptl_mait_t* ptl_mait, int num_entries) {
@@ -513,6 +618,7 @@ void ifoClose(ifo_handle_t *ifofile) {
 static int ifoRead_VMG(ifo_handle_t *ifofile) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   vmgi_mat_t *vmgi_mat;
+  fixed_buf_reader r;
 
   vmgi_mat = calloc(1, sizeof(vmgi_mat_t));
   if(!vmgi_mat)
@@ -526,52 +632,58 @@ static int ifoRead_VMG(ifo_handle_t *ifofile) {
     return 0;
   }
 
-  if(!DVDReadBytes(ifop->file, vmgi_mat, sizeof(vmgi_mat_t))) {
+  if(!DVDReadFixedBuffer(ifop->file, &r, VMGI_MAT_SIZE)) {
     free(ifofile->vmgi_mat);
     ifofile->vmgi_mat = NULL;
     return 0;
   }
 
+  ReadBufData(&r.r, vmgi_mat->vmg_identifier, 12);
   if(strncmp("DVDVIDEO-VMG", vmgi_mat->vmg_identifier, 12) != 0) {
     free(ifofile->vmgi_mat);
     ifofile->vmgi_mat = NULL;
     return 0;
   }
 
-  B2N_32(vmgi_mat->vmg_last_sector);
-  B2N_32(vmgi_mat->vmgi_last_sector);
-  B2N_32(vmgi_mat->vmg_category);
-  B2N_16(vmgi_mat->vmg_nr_of_volumes);
-  B2N_16(vmgi_mat->vmg_this_volume_nr);
-  B2N_16(vmgi_mat->vmg_nr_of_title_sets);
-  B2N_64(vmgi_mat->vmg_pos_code);
-  B2N_32(vmgi_mat->vmgi_last_byte);
-  B2N_32(vmgi_mat->first_play_pgc);
-  B2N_32(vmgi_mat->vmgm_vobs);
-  B2N_32(vmgi_mat->tt_srpt);
-  B2N_32(vmgi_mat->vmgm_pgci_ut);
-  B2N_32(vmgi_mat->ptl_mait);
-  B2N_32(vmgi_mat->vts_atrt);
-  B2N_32(vmgi_mat->txtdt_mgi);
-  B2N_32(vmgi_mat->vmgm_c_adt);
-  B2N_32(vmgi_mat->vmgm_vobu_admap);
-  read_video_attr(&vmgi_mat->vmgm_video_attr);
-  read_audio_attr(&vmgi_mat->vmgm_audio_attr);
-  read_subp_attr(&vmgi_mat->vmgm_subp_attr);
-
-
-  CHECK_ZERO(vmgi_mat->zero_1);
-  CHECK_ZERO(vmgi_mat->zero_2);
+  ReadBuf32(&r.r, &vmgi_mat->vmg_last_sector);
+  SkipZeroBuf(&r.r, 12);
+  ReadBuf32(&r.r, &vmgi_mat->vmgi_last_sector);
+  SkipZeroBuf(&r.r, 1);
+  ReadBuf8(&r.r, &vmgi_mat->specification_version);
+  ReadBuf32(&r.r, &vmgi_mat->vmg_category);
+  ReadBuf16(&r.r, &vmgi_mat->vmg_nr_of_volumes);
+  ReadBuf16(&r.r, &vmgi_mat->vmg_this_volume_nr);
+  ReadBuf8(&r.r, &vmgi_mat->disc_side);
   /* DVDs created by VDR-to-DVD device LG RC590M violate the following check with
    * vmgi_mat->zero_3 = 0x00000000010000000000000000000000000000. */
-  CHECK_ZERO(vmgi_mat->zero_3);
-  CHECK_ZERO(vmgi_mat->zero_4);
-  CHECK_ZERO(vmgi_mat->zero_5);
-  CHECK_ZERO(vmgi_mat->zero_6);
-  CHECK_ZERO(vmgi_mat->zero_7);
-  CHECK_ZERO(vmgi_mat->zero_8);
-  CHECK_ZERO(vmgi_mat->zero_9);
-  CHECK_ZERO(vmgi_mat->zero_10);
+  SkipZeroBuf(&r.r, 19);
+  ReadBuf16(&r.r, &vmgi_mat->vmg_nr_of_title_sets);
+  ReadBufData(&r.r, vmgi_mat->provider_identifier, 32);
+  ReadBuf64(&r.r, &vmgi_mat->vmg_pos_code);
+  SkipZeroBuf(&r.r, 24);
+  ReadBuf32(&r.r, &vmgi_mat->vmgi_last_byte);
+  ReadBuf32(&r.r, &vmgi_mat->first_play_pgc);
+  SkipZeroBuf(&r.r, 56);
+  ReadBuf32(&r.r, &vmgi_mat->vmgm_vobs);
+  ReadBuf32(&r.r, &vmgi_mat->tt_srpt);
+  ReadBuf32(&r.r, &vmgi_mat->vmgm_pgci_ut);
+  ReadBuf32(&r.r, &vmgi_mat->ptl_mait);
+  ReadBuf32(&r.r, &vmgi_mat->vts_atrt);
+  ReadBuf32(&r.r, &vmgi_mat->txtdt_mgi);
+  ReadBuf32(&r.r, &vmgi_mat->vmgm_c_adt);
+  ReadBuf32(&r.r, &vmgi_mat->vmgm_vobu_admap);
+  SkipZeroBuf(&r.r, 32);
+  read_video_attr(&r.r, &vmgi_mat->vmgm_video_attr);
+  SkipZeroBuf(&r.r, 1);
+  ReadBuf8(&r.r, &vmgi_mat->nr_of_vmgm_audio_streams);
+  read_audio_attr(&r.r, &vmgi_mat->vmgm_audio_attr);
+  SkipZeroBuf(&r.r, AUDIO_ATTR_SIZE * 7);
+  SkipZeroBuf(&r.r, 17);
+  ReadBuf8(&r.r, &vmgi_mat->nr_of_vmgm_subp_streams);
+  read_subp_attr(&r.r, &vmgi_mat->vmgm_subp_attr);
+  SkipZeroBuf(&r.r, SUBP_ATTR_SIZE * 27);
+
+
   CHECK_VALUE(vmgi_mat->vmg_last_sector != 0);
   CHECK_VALUE(vmgi_mat->vmgi_last_sector != 0);
   CHECK_VALUE(vmgi_mat->vmgi_last_sector * 2 <= vmgi_mat->vmg_last_sector);
@@ -608,8 +720,9 @@ static int ifoRead_VTS(ifo_handle_t *ifofile) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   vtsi_mat_t *vtsi_mat;
   int i;
+  fixed_buf_reader r;
 
-  vtsi_mat = calloc(1, sizeof(vtsi_mat_t));
+  vtsi_mat = calloc(1, sizeof(*vtsi_mat));
   if(!vtsi_mat)
     return 0;
 
@@ -621,11 +734,13 @@ static int ifoRead_VTS(ifo_handle_t *ifofile) {
     return 0;
   }
 
-  if(!(DVDReadBytes(ifop->file, vtsi_mat, sizeof(vtsi_mat_t)))) {
+  if(!DVDReadFixedBuffer(ifop->file, &r, VTSI_MAT_SIZE)) {
     free(ifofile->vtsi_mat);
     ifofile->vtsi_mat = NULL;
     return 0;
   }
+
+  ReadBufData(&r.r, vtsi_mat->vts_identifier, 12);
 
   if(strncmp("DVDVIDEO-VTS", vtsi_mat->vts_identifier, 12) != 0) {
     free(ifofile->vtsi_mat);
@@ -633,51 +748,47 @@ static int ifoRead_VTS(ifo_handle_t *ifofile) {
     return 0;
   }
 
-  read_video_attr(&vtsi_mat->vtsm_video_attr);
-  read_video_attr(&vtsi_mat->vts_video_attr);
-  read_audio_attr(&vtsi_mat->vtsm_audio_attr);
+  ReadBuf32(&r.r, &vtsi_mat->vts_last_sector);
+  SkipZeroBuf(&r.r, 12);
+  ReadBuf32(&r.r, &vtsi_mat->vtsi_last_sector);
+  SkipZeroBuf(&r.r, 1);
+  ReadBuf8(&r.r, &vtsi_mat->specification_version);
+  ReadBuf32(&r.r, &vtsi_mat->vts_category);
+  SkipZeroBuf(&r.r, 90);
+  ReadBuf32(&r.r, &vtsi_mat->vtsi_last_byte);
+  SkipZeroBuf(&r.r, 60);
+  ReadBuf32(&r.r, &vtsi_mat->vtsm_vobs);
+  ReadBuf32(&r.r, &vtsi_mat->vtstt_vobs);
+  ReadBuf32(&r.r, &vtsi_mat->vts_ptt_srpt);
+  ReadBuf32(&r.r, &vtsi_mat->vts_pgcit);
+  ReadBuf32(&r.r, &vtsi_mat->vtsm_pgci_ut);
+  ReadBuf32(&r.r, &vtsi_mat->vts_tmapt);
+  ReadBuf32(&r.r, &vtsi_mat->vtsm_c_adt);
+  ReadBuf32(&r.r, &vtsi_mat->vtsm_vobu_admap);
+  ReadBuf32(&r.r, &vtsi_mat->vts_c_adt);
+  ReadBuf32(&r.r, &vtsi_mat->vts_vobu_admap);
+  SkipZeroBuf(&r.r, 24);
+  read_video_attr(&r.r, &vtsi_mat->vtsm_video_attr);
+  SkipZeroBuf(&r.r, 1);
+  ReadBuf8(&r.r, &vtsi_mat->nr_of_vtsm_audio_streams);
+  read_audio_attr(&r.r, &vtsi_mat->vtsm_audio_attr);
+  SkipZeroBuf(&r.r, AUDIO_ATTR_SIZE * 7);
+  SkipZeroBuf(&r.r, 17);
+  ReadBuf8(&r.r, &vtsi_mat->nr_of_vtsm_subp_streams);
+  read_subp_attr(&r.r, &vtsi_mat->vtsm_subp_attr);
+  SkipZeroBuf(&r.r, SUBP_ATTR_SIZE * 27);
+  SkipZeroBuf(&r.r, 2);
+  read_video_attr(&r.r, &vtsi_mat->vts_video_attr);
+  SkipZeroBuf(&r.r, 1);
+  ReadBuf8(&r.r, &vtsi_mat->nr_of_vts_audio_streams);
   for(i=0; i<8; i++)
-    read_audio_attr(&vtsi_mat->vts_audio_attr[i]);
-  read_subp_attr(&vtsi_mat->vtsm_subp_attr);
+    read_audio_attr(&r.r, &vtsi_mat->vts_audio_attr[i]);
+  SkipZeroBuf(&r.r, 17);
+  ReadBuf8(&r.r, &vtsi_mat->nr_of_vts_subp_streams);
   for(i=0; i<32; i++)
-    read_subp_attr(&vtsi_mat->vts_subp_attr[i]);
-  B2N_32(vtsi_mat->vts_last_sector);
-  B2N_32(vtsi_mat->vtsi_last_sector);
-  B2N_32(vtsi_mat->vts_category);
-  B2N_32(vtsi_mat->vtsi_last_byte);
-  B2N_32(vtsi_mat->vtsm_vobs);
-  B2N_32(vtsi_mat->vtstt_vobs);
-  B2N_32(vtsi_mat->vts_ptt_srpt);
-  B2N_32(vtsi_mat->vts_pgcit);
-  B2N_32(vtsi_mat->vtsm_pgci_ut);
-  B2N_32(vtsi_mat->vts_tmapt);
-  B2N_32(vtsi_mat->vtsm_c_adt);
-  B2N_32(vtsi_mat->vtsm_vobu_admap);
-  B2N_32(vtsi_mat->vts_c_adt);
-  B2N_32(vtsi_mat->vts_vobu_admap);
+    read_subp_attr(&r.r, &vtsi_mat->vts_subp_attr[i]);
+  SkipZeroBuf(&r.r, 2);
 
-
-  CHECK_ZERO(vtsi_mat->zero_1);
-  CHECK_ZERO(vtsi_mat->zero_2);
-  CHECK_ZERO(vtsi_mat->zero_3);
-  CHECK_ZERO(vtsi_mat->zero_4);
-  CHECK_ZERO(vtsi_mat->zero_5);
-  CHECK_ZERO(vtsi_mat->zero_6);
-  CHECK_ZERO(vtsi_mat->zero_7);
-  CHECK_ZERO(vtsi_mat->zero_8);
-  CHECK_ZERO(vtsi_mat->zero_9);
-  CHECK_ZERO(vtsi_mat->zero_10);
-  CHECK_ZERO(vtsi_mat->zero_11);
-  CHECK_ZERO(vtsi_mat->zero_12);
-  CHECK_ZERO(vtsi_mat->zero_13);
-  CHECK_ZERO(vtsi_mat->zero_14);
-  CHECK_ZERO(vtsi_mat->zero_15);
-  CHECK_ZERO(vtsi_mat->zero_16);
-  CHECK_ZERO(vtsi_mat->zero_17);
-  CHECK_ZERO(vtsi_mat->zero_18);
-  CHECK_ZERO(vtsi_mat->zero_19);
-  CHECK_ZERO(vtsi_mat->zero_20);
-  CHECK_ZERO(vtsi_mat->zero_21);
   CHECK_VALUE(vtsi_mat->vtsi_last_sector*2 <= vtsi_mat->vts_last_sector);
   CHECK_VALUE(vtsi_mat->vtsi_last_byte/DVD_BLOCK_LEN <= vtsi_mat->vtsi_last_sector);
   CHECK_VALUE(vtsi_mat->vtsm_vobs == 0 ||
@@ -707,13 +818,12 @@ static int ifoRead_VTS(ifo_handle_t *ifofile) {
     CHECK_ZERO(vtsi_mat->vts_subp_attr[i]);
 
   for(i = 0; i < 8; i++) {
-    read_multichannel_ext(&vtsi_mat->vts_mu_audio_attr[i]);
+    read_multichannel_ext(&r.r, ifop, &vtsi_mat->vts_mu_audio_attr[i]);
     CHECK_ZERO0(vtsi_mat->vts_mu_audio_attr[i].zero1);
     CHECK_ZERO0(vtsi_mat->vts_mu_audio_attr[i].zero2);
     CHECK_ZERO0(vtsi_mat->vts_mu_audio_attr[i].zero3);
     CHECK_ZERO0(vtsi_mat->vts_mu_audio_attr[i].zero4);
     CHECK_ZERO0(vtsi_mat->vts_mu_audio_attr[i].zero5);
-    CHECK_ZERO(vtsi_mat->vts_mu_audio_attr[i].zero6);
   }
 
   return 1;
@@ -724,15 +834,19 @@ static int ifoRead_PGC_COMMAND_TBL(ifo_handle_t *ifofile,
                                    pgc_command_tbl_t *cmd_tbl,
                                    unsigned int offset) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
+  unsigned i;
+  fixed_buf_reader r;
+
   if(!DVDFileSeek_(ifop->file, offset))
     return 0;
 
-  if(!(DVDReadBytes(ifop->file, cmd_tbl, PGC_COMMAND_TBL_SIZE)))
+  if(!DVDReadFixedBuffer(ifop->file, &r, PGC_COMMAND_TBL_SIZE))
     return 0;
 
-  B2N_16(cmd_tbl->nr_of_pre);
-  B2N_16(cmd_tbl->nr_of_post);
-  B2N_16(cmd_tbl->nr_of_cell);
+  ReadBuf16(&r.r, &cmd_tbl->nr_of_pre);
+  ReadBuf16(&r.r, &cmd_tbl->nr_of_post);
+  ReadBuf16(&r.r, &cmd_tbl->nr_of_cell);
+  ReadBuf16(&r.r, &cmd_tbl->last_byte);
   B2N_16(cmd_tbl->last_byte);
 
   CHECK_VALUE(cmd_tbl->nr_of_pre + cmd_tbl->nr_of_post + cmd_tbl->nr_of_cell<= 255);
@@ -741,34 +855,51 @@ static int ifoRead_PGC_COMMAND_TBL(ifo_handle_t *ifofile,
 
   if(cmd_tbl->nr_of_pre != 0) {
     unsigned int pre_cmds_size  = cmd_tbl->nr_of_pre * COMMAND_DATA_SIZE;
+    dynamic_buf_reader d;
+
     cmd_tbl->pre_cmds = malloc(pre_cmds_size);
     if(!cmd_tbl->pre_cmds)
       return 0;
 
-    if(!(DVDReadBytes(ifop->file, cmd_tbl->pre_cmds, pre_cmds_size))) {
+    if(!DVDReadDynamicBuffer(ifop->file, &d, pre_cmds_size)) {
       free(cmd_tbl->pre_cmds);
       return 0;
     }
+
+    for (i=0; i<cmd_tbl->nr_of_pre; i++)
+        ReadBufData(&d.d, cmd_tbl->pre_cmds[i].bytes, 8);
+
+    ReleaseDynamicBuffer(&d);
   }
 
   if(cmd_tbl->nr_of_post != 0) {
     unsigned int post_cmds_size = cmd_tbl->nr_of_post * COMMAND_DATA_SIZE;
+    dynamic_buf_reader d;
+
     cmd_tbl->post_cmds = malloc(post_cmds_size);
     if(!cmd_tbl->post_cmds) {
       if(cmd_tbl->pre_cmds)
         free(cmd_tbl->pre_cmds);
       return 0;
     }
-    if(!(DVDReadBytes(ifop->file, cmd_tbl->post_cmds, post_cmds_size))) {
+
+    if(!DVDReadDynamicBuffer(ifop->file, &d, post_cmds_size)) {
       if(cmd_tbl->pre_cmds)
         free(cmd_tbl->pre_cmds);
       free(cmd_tbl->post_cmds);
       return 0;
     }
+
+    for (i=0; i<cmd_tbl->nr_of_post; i++)
+        ReadBufData(&d.d, cmd_tbl->post_cmds[i].bytes, 8);
+
+    ReleaseDynamicBuffer(&d);
   }
 
   if(cmd_tbl->nr_of_cell != 0) {
     unsigned int cell_cmds_size = cmd_tbl->nr_of_cell * COMMAND_DATA_SIZE;
+    dynamic_buf_reader d;
+
     cmd_tbl->cell_cmds = malloc(cell_cmds_size);
     if(!cmd_tbl->cell_cmds) {
       if(cmd_tbl->pre_cmds)
@@ -777,7 +908,8 @@ static int ifoRead_PGC_COMMAND_TBL(ifo_handle_t *ifofile,
         free(cmd_tbl->post_cmds);
       return 0;
     }
-    if(!(DVDReadBytes(ifop->file, cmd_tbl->cell_cmds, cell_cmds_size))) {
+
+    if(!DVDReadDynamicBuffer(ifop->file, &d, cell_cmds_size)) {
       if(cmd_tbl->pre_cmds)
         free(cmd_tbl->pre_cmds);
       if(cmd_tbl->post_cmds)
@@ -785,6 +917,11 @@ static int ifoRead_PGC_COMMAND_TBL(ifo_handle_t *ifofile,
       free(cmd_tbl->cell_cmds);
       return 0;
     }
+
+    for (i=0; i<cmd_tbl->nr_of_cell; i++)
+        ReadBufData(&d.d, cmd_tbl->cell_cmds[i].bytes, 8);
+
+    ReleaseDynamicBuffer(&d);
   }
 
   /*
@@ -810,13 +947,19 @@ static int ifoRead_PGC_PROGRAM_MAP(ifo_handle_t *ifofile,
                                    pgc_program_map_t *program_map,
                                    unsigned int nr, unsigned int offset) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
-  unsigned int size = nr * sizeof(pgc_program_map_t);
+  unsigned int i;
+  dynamic_buf_reader d;
 
   if(!DVDFileSeek_(ifop->file, offset))
     return 0;
 
-  if(!(DVDReadBytes(ifop->file, program_map, size)))
+  if(!DVDReadDynamicBuffer(ifop->file, &d, nr * sizeof(pgc_program_map_t)))
     return 0;
+
+  for (i = 0; i <nr; i++)
+    ReadBuf8(&d.d, &program_map[i]);
+
+  ReleaseDynamicBuffer(&d);
 
   return 1;
 }
@@ -826,22 +969,24 @@ static int ifoRead_CELL_PLAYBACK_TBL(ifo_handle_t *ifofile,
                                      unsigned int nr, unsigned int offset) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   unsigned int i;
-  unsigned int size = nr * sizeof(cell_playback_t);
+  dynamic_buf_reader d;
 
   if(!DVDFileSeek_(ifop->file, offset))
     return 0;
 
-  if(!(DVDReadBytes(ifop->file, cell_playback, size)))
+  if(!DVDReadDynamicBuffer(ifop->file, &d, nr * CELL_PLAYBACK_SIZE))
     return 0;
 
   for(i = 0; i < nr; i++) {
-    read_cell_playback(&cell_playback[i]);
+    read_cell_playback(&d.d, &cell_playback[i]);
     /* Changed < to <= because this was false in the movie 'Pi'. */
     CHECK_VALUE(cell_playback[i].last_vobu_start_sector <=
                 cell_playback[i].last_sector);
     CHECK_VALUE(cell_playback[i].first_sector <=
                 cell_playback[i].last_vobu_start_sector);
   }
+
+  ReleaseDynamicBuffer(&d);
 
   return 1;
 }
@@ -852,18 +997,21 @@ static int ifoRead_CELL_POSITION_TBL(ifo_handle_t *ifofile,
                                      unsigned int nr, unsigned int offset) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   unsigned int i;
-  unsigned int size = nr * sizeof(cell_position_t);
+  dynamic_buf_reader d;
 
   if(!DVDFileSeek_(ifop->file, offset))
     return 0;
 
-  if(!(DVDReadBytes(ifop->file, cell_position, size)))
+  if(!DVDReadDynamicBuffer(ifop->file, &d, nr * CELL_POSITION_SIZE))
     return 0;
 
   for(i = 0; i < nr; i++) {
-    B2N_16(cell_position[i].vob_id_nr);
-    CHECK_ZERO(cell_position[i].zero_1);
+    ReadBuf16(&d.d, &cell_position[i].vob_id_nr);
+    SkipZeroBuf(&d.d, 1);
+    ReadBuf8(&d.d, &cell_position[i].cell_nr);
   }
+
+  ReleaseDynamicBuffer(&d);
 
   return 1;
 }
@@ -871,30 +1019,35 @@ static int ifoRead_CELL_POSITION_TBL(ifo_handle_t *ifofile,
 static int ifoRead_PGC(ifo_handle_t *ifofile, pgc_t *pgc, unsigned int offset) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   unsigned int i;
+  fixed_buf_reader r;
 
   if(!DVDFileSeek_(ifop->file, offset))
     return 0;
 
-  if(!(DVDReadBytes(ifop->file, pgc, PGC_SIZE)))
+  if(!DVDReadFixedBuffer(ifop->file, &r, PGC_SIZE))
     return 0;
 
-  read_user_ops(&pgc->prohibited_ops);
-  B2N_16(pgc->next_pgc_nr);
-  B2N_16(pgc->prev_pgc_nr);
-  B2N_16(pgc->goup_pgc_nr);
-  B2N_16(pgc->command_tbl_offset);
-  B2N_16(pgc->program_map_offset);
-  B2N_16(pgc->cell_playback_offset);
-  B2N_16(pgc->cell_position_offset);
-
+  SkipZeroBuf(&r.r, 2);
+  ReadBuf8(&r.r, &pgc->nr_of_programs);
+  ReadBuf8(&r.r, &pgc->nr_of_cells);
+  ReadBufTime(&r.r, &pgc->playback_time);
+  read_user_ops(&r.r, &pgc->prohibited_ops);
   for(i = 0; i < 8; i++)
-    B2N_16(pgc->audio_control[i]);
+    ReadBuf16(&r.r, &pgc->audio_control[i]);
   for(i = 0; i < 32; i++)
-    B2N_32(pgc->subp_control[i]);
+    ReadBuf32(&r.r, &pgc->subp_control[i]);
+  ReadBuf16(&r.r, &pgc->next_pgc_nr);
+  ReadBuf16(&r.r, &pgc->prev_pgc_nr);
+  ReadBuf16(&r.r, &pgc->goup_pgc_nr);
+  ReadBuf8(&r.r, &pgc->pg_playback_mode);
+  ReadBuf8(&r.r, &pgc->still_time);
   for(i = 0; i < 16; i++)
-    B2N_32(pgc->palette[i]);
+    ReadBuf32(&r.r, &pgc->palette[i]);
+  ReadBuf16(&r.r, &pgc->command_tbl_offset);
+  ReadBuf16(&r.r, &pgc->program_map_offset);
+  ReadBuf16(&r.r, &pgc->cell_playback_offset);
+  ReadBuf16(&r.r, &pgc->cell_position_offset);
 
-  CHECK_ZERO(pgc->zero_1);
   CHECK_VALUE(pgc->nr_of_programs <= pgc->nr_of_cells);
 
   /* verify time (look at print_time) */
@@ -1033,6 +1186,8 @@ int ifoRead_TT_SRPT(ifo_handle_t *ifofile) {
   tt_srpt_t *tt_srpt;
   unsigned int i;
   size_t info_length;
+  fixed_buf_reader r;
+  dynamic_buf_reader d;
 
   if(!ifofile)
     return 0;
@@ -1052,53 +1207,53 @@ int ifoRead_TT_SRPT(ifo_handle_t *ifofile) {
 
   ifofile->tt_srpt = tt_srpt;
 
-  if(!(DVDReadBytes(ifop->file, tt_srpt, TT_SRPT_SIZE))) {
+  if(!DVDReadFixedBuffer(ifop->file, &r, TT_SRPT_SIZE)) {
     Log0(ifop->ctx, "Unable to read read TT_SRPT.");
     free(tt_srpt);
     return 0;
   }
 
-  B2N_16(tt_srpt->nr_of_srpts);
-  B2N_32(tt_srpt->last_byte);
+  ReadBuf16(&r.r, &tt_srpt->nr_of_srpts);
+  SkipZeroBuf(&r.r, 2);
+  ReadBuf32(&r.r, &tt_srpt->last_byte);
 
   /* E-One releases don't fill this field */
   if(tt_srpt->last_byte == 0) {
-    tt_srpt->last_byte = tt_srpt->nr_of_srpts * sizeof(title_info_t) - 1 + TT_SRPT_SIZE;
+    tt_srpt->last_byte = tt_srpt->nr_of_srpts * TITLE_INFO_SIZE - 1 + TT_SRPT_SIZE;
   }
   info_length = tt_srpt->last_byte + 1 - TT_SRPT_SIZE;
 
-  tt_srpt->title = calloc(1, info_length);
+  tt_srpt->title = calloc(tt_srpt->nr_of_srpts, sizeof(*tt_srpt->title));
   if(!tt_srpt->title) {
     free(tt_srpt);
     ifofile->tt_srpt = NULL;
     return 0;
   }
-  if(!(DVDReadBytes(ifop->file, tt_srpt->title, info_length))) {
+
+  if(!DVDReadDynamicBuffer(ifop->file, &d, info_length)) {
     Log0(ifop->ctx, "libdvdread: Unable to read read TT_SRPT.");
     ifoFree_TT_SRPT(ifofile);
     return 0;
   }
 
-  if(tt_srpt->nr_of_srpts>info_length/sizeof(title_info_t)){
+  if(tt_srpt->nr_of_srpts>info_length/TITLE_INFO_SIZE){
     Log1(ifop->ctx, "data mismatch: info_length (%zd)!= nr_of_srpts (%d). Truncating.",
-            info_length/sizeof(title_info_t),tt_srpt->nr_of_srpts);
-    tt_srpt->nr_of_srpts=info_length/sizeof(title_info_t);
+            info_length/TITLE_INFO_SIZE,tt_srpt->nr_of_srpts);
+    tt_srpt->nr_of_srpts=info_length/TITLE_INFO_SIZE;
   }
 
-  for(i =  0; i < tt_srpt->nr_of_srpts; i++) {
-    B2N_16(tt_srpt->title[i].nr_of_ptts);
-    B2N_16(tt_srpt->title[i].parental_id);
-    B2N_32(tt_srpt->title[i].title_set_sector);
-  }
-
-
-  CHECK_ZERO(tt_srpt->zero_1);
   CHECK_VALUE(tt_srpt->nr_of_srpts != 0);
   CHECK_VALUE(tt_srpt->nr_of_srpts < 100); /* ?? */
-  CHECK_VALUE(tt_srpt->nr_of_srpts * sizeof(title_info_t) <= info_length);
+  CHECK_VALUE(tt_srpt->nr_of_srpts * TITLE_INFO_SIZE <= info_length);
 
   for(i = 0; i < tt_srpt->nr_of_srpts; i++) {
-    read_playback_type(&tt_srpt->title[i].pb_ty);
+    read_playback_type(&d.d, &tt_srpt->title[i].pb_ty);
+    ReadBuf8(&d.d, &tt_srpt->title[i].nr_of_angles);
+    ReadBuf16(&d.d, &tt_srpt->title[i].nr_of_ptts);
+    ReadBuf16(&d.d, &tt_srpt->title[i].parental_id);
+    ReadBuf8(&d.d, &tt_srpt->title[i].title_set_nr);
+    ReadBuf8(&d.d, &tt_srpt->title[i].vts_ttn);
+    ReadBuf32(&d.d, &tt_srpt->title[i].title_set_sector);
     CHECK_VALUE(tt_srpt->title[i].pb_ty.zero_1 == 0);
     CHECK_VALUE(tt_srpt->title[i].nr_of_angles != 0);
     CHECK_VALUE(tt_srpt->title[i].nr_of_angles < 10);
@@ -1112,16 +1267,18 @@ int ifoRead_TT_SRPT(ifo_handle_t *ifofile) {
     /* CHECK_VALUE(tt_srpt->title[i].title_set_sector != 0); */
   }
 
+  ReleaseDynamicBuffer(&d);
+
   /* Make this a function */
 #if 0
   if(memcmp((uint8_t *)tt_srpt->title +
-            tt_srpt->nr_of_srpts * sizeof(title_info_t),
+            tt_srpt->nr_of_srpts * TITLE_INFO_SIZE,
             my_friendly_zeros,
-            info_length - tt_srpt->nr_of_srpts * sizeof(title_info_t))) {
+            info_length - tt_srpt->nr_of_srpts * TITLE_INFO_SIZE)) {
     Log1(ifop->ctx, "VMG_PTT_SRPT slack is != 0, ");
     hexdump((uint8_t *)tt_srpt->title +
-            tt_srpt->nr_of_srpts * sizeof(title_info_t),
-            info_length - tt_srpt->nr_of_srpts * sizeof(title_info_t));
+            tt_srpt->nr_of_srpts * TITLE_INFO_SIZE,
+            info_length - tt_srpt->nr_of_srpts * TITLE_INFO_SIZE);
   }
 #endif
 
@@ -1146,7 +1303,8 @@ int ifoRead_VTS_PTT_SRPT(ifo_handle_t *ifofile) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   vts_ptt_srpt_t *vts_ptt_srpt = NULL;
   int info_length, i, j;
-  uint32_t *data = NULL;
+  fixed_buf_reader r;
+  dynamic_buf_reader d;
 
   if(!ifofile)
     return 0;
@@ -1168,33 +1326,24 @@ int ifoRead_VTS_PTT_SRPT(ifo_handle_t *ifofile) {
   vts_ptt_srpt->title = NULL;
   ifofile->vts_ptt_srpt = vts_ptt_srpt;
 
-  if(!(DVDReadBytes(ifop->file, vts_ptt_srpt, VTS_PTT_SRPT_SIZE))) {
+  if(!DVDReadFixedBuffer(ifop->file, &r, VTS_PTT_SRPT_SIZE)) {
     Log0(ifop->ctx, "Unable to read PTT search table.");
     goto fail;
   }
 
-  B2N_16(vts_ptt_srpt->nr_of_srpts);
-  B2N_32(vts_ptt_srpt->last_byte);
+  ReadBuf16(&r.r, &vts_ptt_srpt->nr_of_srpts);
+  SkipZeroBuf(&r.r, 2);
+  ReadBuf32(&r.r, &vts_ptt_srpt->last_byte);
 
-  CHECK_ZERO(vts_ptt_srpt->zero_1);
   CHECK_VALUE(vts_ptt_srpt->nr_of_srpts != 0);
   CHECK_VALUE(vts_ptt_srpt->nr_of_srpts < 100); /* ?? */
 
   /* E-One releases don't fill this field */
   if(vts_ptt_srpt->last_byte == 0) {
-    vts_ptt_srpt->last_byte  = vts_ptt_srpt->nr_of_srpts * sizeof(*data) - 1 + VTS_PTT_SRPT_SIZE;
+    vts_ptt_srpt->last_byte  = vts_ptt_srpt->nr_of_srpts * sizeof(uint32_t) - 1 + VTS_PTT_SRPT_SIZE;
   }
   info_length = vts_ptt_srpt->last_byte + 1 - VTS_PTT_SRPT_SIZE;
-  data = calloc(1, info_length);
-  if(!data)
-    goto fail;
-
-  if(!(DVDReadBytes(ifop->file, data, info_length))) {
-    Log0(ifop->ctx, "Unable to read PTT search table.");
-    goto fail;
-  }
-
-  if(vts_ptt_srpt->nr_of_srpts > info_length / sizeof(*data)) {
+  if(vts_ptt_srpt->nr_of_srpts > info_length / sizeof(uint32_t)) {
     Log0(ifop->ctx, "PTT search table too small.");
     goto fail;
   }
@@ -1204,24 +1353,31 @@ int ifoRead_VTS_PTT_SRPT(ifo_handle_t *ifofile) {
     goto fail;
   }
 
+  vts_ptt_srpt->ttu_offset = calloc(1, info_length);
+  if(!vts_ptt_srpt->ttu_offset)
+    goto fail;
+
+  if(!DVDReadDynamicBuffer(ifop->file, &d, info_length)) {
+    Log0(ifop->ctx, "Unable to read PTT search table.");
+    goto fail;
+  }
+
   for(i = 0; i < vts_ptt_srpt->nr_of_srpts; i++) {
     /* Transformers 3 has PTT start bytes that point outside the SRPT PTT */
-    uint32_t start = data[i];
-    B2N_32(start);
-    if(start + sizeof(ptt_info_t) > vts_ptt_srpt->last_byte + 1) {
+    uint32_t start;
+    ReadBuf32(&d.d, &start);
+    if(start + PTT_INFO_SIZE > vts_ptt_srpt->last_byte + 1) {
       /* don't mess with any bytes beyond the end of the allocation */
       vts_ptt_srpt->nr_of_srpts = i;
       break;
     }
-    data[i] = start;
-    /* assert(data[i] + sizeof(ptt_info_t) <= vts_ptt_srpt->last_byte + 1);
+    vts_ptt_srpt->ttu_offset[i] = start;
+    /* assert(vts_ptt_srpt->ttu_offset[i] + PTT_INFO_SIZE <= vts_ptt_srpt->last_byte + 1);
        Magic Knight Rayearth Daybreak is mastered very strange and has
-       Titles with 0 PTTs. They all have a data[i] offsets beyond the end of
+       Titles with 0 PTTs. They all have a vts_ptt_srpt->ttu_offset[i] offsets beyond the end of
        of the vts_ptt_srpt structure. */
-    CHECK_VALUE(data[i] + sizeof(ptt_info_t) <= vts_ptt_srpt->last_byte + 1 + 4);
+    CHECK_VALUE(start + PTT_INFO_SIZE <= vts_ptt_srpt->last_byte + 1 + 4);
   }
-
-  vts_ptt_srpt->ttu_offset = data;
 
   vts_ptt_srpt->title = calloc(vts_ptt_srpt->nr_of_srpts, sizeof(ttu_t));
   if(!vts_ptt_srpt->title)
@@ -1230,9 +1386,9 @@ int ifoRead_VTS_PTT_SRPT(ifo_handle_t *ifofile) {
   for(i = 0; i < vts_ptt_srpt->nr_of_srpts; i++) {
     int n;
     if(i < vts_ptt_srpt->nr_of_srpts - 1)
-      n = (data[i+1] - data[i]);
+      n = vts_ptt_srpt->ttu_offset[i+1] - vts_ptt_srpt->ttu_offset[i];
     else
-      n = (vts_ptt_srpt->last_byte + 1 - data[i]);
+      n = vts_ptt_srpt->last_byte + 1 - vts_ptt_srpt->ttu_offset[i];
 
     /* assert(n > 0 && (n % 4) == 0);
        Magic Knight Rayearth Daybreak is mastered very strange and has
@@ -1252,20 +1408,13 @@ int ifoRead_VTS_PTT_SRPT(ifo_handle_t *ifofile) {
     }
     for(j = 0; j < vts_ptt_srpt->title[i].nr_of_ptts; j++) {
       /* The assert placed here because of Magic Knight Rayearth Daybreak */
-      CHECK_VALUE(data[i] + sizeof(ptt_info_t) <= vts_ptt_srpt->last_byte + 1);
-      vts_ptt_srpt->title[i].ptt[j].pgcn
-        = *(uint16_t*)(((char *)data) + data[i] + 4*j - VTS_PTT_SRPT_SIZE);
-      vts_ptt_srpt->title[i].ptt[j].pgn
-        = *(uint16_t*)(((char *)data) + data[i] + 4*j + 2 - VTS_PTT_SRPT_SIZE);
+      CHECK_VALUE(vts_ptt_srpt->ttu_offset[i] + PTT_INFO_SIZE <= vts_ptt_srpt->last_byte + 1);
+      ReadBuf16(&d.d, &vts_ptt_srpt->title[i].ptt[j].pgcn);
+      ReadBuf16(&d.d, &vts_ptt_srpt->title[i].ptt[j].pgn);
     }
   }
 
-  for(i = 0; i < vts_ptt_srpt->nr_of_srpts; i++) {
-    for(j = 0; j < vts_ptt_srpt->title[i].nr_of_ptts; j++) {
-      B2N_16(vts_ptt_srpt->title[i].ptt[j].pgcn);
-      B2N_16(vts_ptt_srpt->title[i].ptt[j].pgn);
-    }
-  }
+  ReleaseDynamicBuffer(&d);
 
   for(i = 0; i < vts_ptt_srpt->nr_of_srpts; i++) {
     CHECK_VALUE(vts_ptt_srpt->title[i].nr_of_ptts < 1000); /* ?? */
@@ -1281,7 +1430,7 @@ int ifoRead_VTS_PTT_SRPT(ifo_handle_t *ifofile) {
   return 1;
 
 fail:
-  free(data);
+  free(vts_ptt_srpt->ttu_offset);
   ifofile->vts_ptt_srpt = NULL;
   free(vts_ptt_srpt->title);
   free(vts_ptt_srpt);
@@ -1310,6 +1459,7 @@ int ifoRead_PTL_MAIT(ifo_handle_t *ifofile) {
   ptl_mait_t *ptl_mait;
   int info_length;
   unsigned int i, j;
+  fixed_buf_reader r;
 
   if(!ifofile)
     return 0;
@@ -1329,15 +1479,15 @@ int ifoRead_PTL_MAIT(ifo_handle_t *ifofile) {
 
   ifofile->ptl_mait = ptl_mait;
 
-  if(!(DVDReadBytes(ifop->file, ptl_mait, PTL_MAIT_SIZE))) {
+  if(!DVDReadFixedBuffer(ifop->file, &r, PTL_MAIT_SIZE)) {
     free(ptl_mait);
     ifofile->ptl_mait = NULL;
     return 0;
   }
 
-  B2N_16(ptl_mait->nr_of_countries);
-  B2N_16(ptl_mait->nr_of_vtss);
-  B2N_32(ptl_mait->last_byte);
+  ReadBuf16(&r.r, &ptl_mait->nr_of_countries);
+  ReadBuf16(&r.r, &ptl_mait->nr_of_vtss);
+  ReadBuf32(&r.r, &ptl_mait->last_byte);
 
   CHECK_VALUE(ptl_mait->nr_of_countries != 0);
   CHECK_VALUE(ptl_mait->nr_of_countries < 100); /* ?? */
@@ -1358,29 +1508,28 @@ int ifoRead_PTL_MAIT(ifo_handle_t *ifofile) {
   }
 
   for(i = 0; i < ptl_mait->nr_of_countries; i++) {
-    if(!(DVDReadBytes(ifop->file, &ptl_mait->countries[i], PTL_MAIT_COUNTRY_SIZE))) {
+    if(!DVDReadFixedBuffer(ifop->file, &r, PTL_MAIT_COUNTRY_SIZE)) {
       Log0(ifop->ctx, "Unable to read PTL_MAIT.");
       free(ptl_mait->countries);
       free(ptl_mait);
       ifofile->ptl_mait = NULL;
       return 0;
     }
+
+    ReadBuf16(&r.r, &ptl_mait->countries[i].country_code);
+    SkipZeroBuf(&r.r, 2);
+    ReadBuf16(&r.r, &ptl_mait->countries[i].pf_ptl_mai_start_byte);
+    SkipZeroBuf(&r.r, 2);
   }
 
   for(i = 0; i < ptl_mait->nr_of_countries; i++) {
-    B2N_16(ptl_mait->countries[i].country_code);
-    B2N_16(ptl_mait->countries[i].pf_ptl_mai_start_byte);
-  }
-
-  for(i = 0; i < ptl_mait->nr_of_countries; i++) {
-    CHECK_ZERO(ptl_mait->countries[i].zero_1);
-    CHECK_ZERO(ptl_mait->countries[i].zero_2);
     CHECK_VALUE(ptl_mait->countries[i].pf_ptl_mai_start_byte
                 + sizeof(pf_level_t) * (ptl_mait->nr_of_vtss + 1) <= ptl_mait->last_byte + 1);
   }
 
   for(i = 0; i < ptl_mait->nr_of_countries; i++) {
     uint16_t *pf_temp;
+    dynamic_buf_reader d;
 
     if(!DVDFileSeek_(ifop->file,
                      ifofile->vmgi_mat->ptl_mait * DVD_BLOCK_LEN
@@ -1392,25 +1541,20 @@ int ifoRead_PTL_MAIT(ifo_handle_t *ifofile) {
       return 0;
     }
     info_length = (ptl_mait->nr_of_vtss + 1) * sizeof(pf_level_t);
-    pf_temp = calloc(1, info_length);
-    if(!pf_temp) {
-      free_ptl_mait(ptl_mait, i);
-      ifofile->ptl_mait = NULL;
-      return 0;
-    }
-    if(!(DVDReadBytes(ifop->file, pf_temp, info_length))) {
+
+    if(!DVDReadDynamicBuffer(ifop->file, &d, info_length)) {
       Log0(ifop->ctx, "Unable to read PTL_MAIT table at index %d.",i);
-      free(pf_temp);
       free_ptl_mait(ptl_mait, i);
       ifofile->ptl_mait = NULL;
       return 0;
     }
+    pf_temp = (uint16_t*)d.buf;
     for (j = 0; j < ((ptl_mait->nr_of_vtss + 1U) * 8U); j++) {
       B2N_16(pf_temp[j]);
     }
     ptl_mait->countries[i].pf_ptl_mai = calloc(1, info_length);
     if(!ptl_mait->countries[i].pf_ptl_mai) {
-      free(pf_temp);
+      ReleaseDynamicBuffer(&d);
       free_ptl_mait(ptl_mait, i);
       ifofile->ptl_mait = NULL;
       return 0;
@@ -1423,7 +1567,7 @@ int ifoRead_PTL_MAIT(ifo_handle_t *ifofile) {
             pf_temp[(7-level)*(ptl_mait->nr_of_vtss+1) + vts];
         }
       }
-      free(pf_temp);
+      ReleaseDynamicBuffer(&d);
     }
   }
   return 1;
@@ -1452,6 +1596,8 @@ int ifoRead_VTS_TMAPT(ifo_handle_t *ifofile) {
   unsigned int offset;
   int info_length;
   unsigned int i, j;
+  fixed_buf_reader r;
+  dynamic_buf_reader d;
 
   if(!ifofile)
     return 0;
@@ -1475,19 +1621,18 @@ int ifoRead_VTS_TMAPT(ifo_handle_t *ifofile) {
 
   ifofile->vts_tmapt = vts_tmapt;
 
-  if(!(DVDReadBytes(ifop->file, vts_tmapt, VTS_TMAPT_SIZE))) {
+  if(!DVDReadFixedBuffer(ifop->file, &r, VTS_TMAPT_SIZE)) {
     Log0(ifop->ctx, "Unable to read VTS_TMAPT.");
     free(vts_tmapt);
     ifofile->vts_tmapt = NULL;
     return 0;
   }
 
-  B2N_16(vts_tmapt->nr_of_tmaps);
-  B2N_32(vts_tmapt->last_byte);
+  ReadBuf16(&r.r, &vts_tmapt->nr_of_tmaps);
+  SkipZeroBuf(&r.r, 2);
+  ReadBuf32(&r.r, &vts_tmapt->last_byte);
 
-  CHECK_ZERO(vts_tmapt->zero_1);
-
-  info_length = vts_tmapt->nr_of_tmaps * 4;
+  info_length = vts_tmapt->nr_of_tmaps * sizeof(*vts_tmap_srp);
 
   vts_tmap_srp = calloc(1, info_length);
   if(!vts_tmap_srp) {
@@ -1498,7 +1643,7 @@ int ifoRead_VTS_TMAPT(ifo_handle_t *ifofile) {
 
   vts_tmapt->tmap_offset = vts_tmap_srp;
 
-  if(!(DVDReadBytes(ifop->file, vts_tmap_srp, info_length))) {
+  if(!DVDReadDynamicBuffer(ifop->file, &d, info_length)) {
     Log0(ifop->ctx, "Unable to read VTS_TMAPT.");
     free(vts_tmap_srp);
     free(vts_tmapt);
@@ -1507,13 +1652,12 @@ int ifoRead_VTS_TMAPT(ifo_handle_t *ifofile) {
   }
 
   for (i = 0; i < vts_tmapt->nr_of_tmaps; i++) {
-    B2N_32(vts_tmap_srp[i]);
+    ReadBuf32(&d.d, &vts_tmap_srp[i]);
   }
 
+  ReleaseDynamicBuffer(&d);
 
-  info_length = vts_tmapt->nr_of_tmaps * sizeof(vts_tmap_t);
-
-  vts_tmapt->tmap = calloc(1, info_length);
+  vts_tmapt->tmap = calloc(vts_tmapt->nr_of_tmaps, sizeof(vts_tmap_t));
   if(!vts_tmapt->tmap) {
     free(vts_tmap_srp);
     free(vts_tmapt);
@@ -1522,19 +1666,21 @@ int ifoRead_VTS_TMAPT(ifo_handle_t *ifofile) {
   }
 
   for(i = 0; i < vts_tmapt->nr_of_tmaps; i++) {
+
     if(!DVDFileSeek_(ifop->file, offset + vts_tmap_srp[i])) {
       ifoFree_VTS_TMAPT(ifofile);
       return 0;
     }
 
-    if(!(DVDReadBytes(ifop->file, &vts_tmapt->tmap[i], VTS_TMAP_SIZE))) {
+    if(!DVDReadFixedBuffer(ifop->file, &r, VTS_TMAP_SIZE)) {
       Log0(ifop->ctx, "Unable to read VTS_TMAP.");
       ifoFree_VTS_TMAPT(ifofile);
       return 0;
     }
 
-    B2N_16(vts_tmapt->tmap[i].nr_of_entries);
-    CHECK_ZERO(vts_tmapt->tmap[i].zero_1);
+    ReadBuf8(&r.r, &vts_tmapt->tmap[i].tmu);
+    SkipZeroBuf(&r.r, 1);
+    ReadBuf16(&r.r, &vts_tmapt->tmap[i].nr_of_entries);
 
     if(vts_tmapt->tmap[i].nr_of_entries == 0) { /* Early out if zero entries */
       vts_tmapt->tmap[i].map_ent = NULL;
@@ -1549,14 +1695,16 @@ int ifoRead_VTS_TMAPT(ifo_handle_t *ifofile) {
       return 0;
     }
 
-    if(!(DVDReadBytes(ifop->file, vts_tmapt->tmap[i].map_ent, info_length))) {
+    if(!DVDReadDynamicBuffer(ifop->file, &d, info_length)) {
       Log0(ifop->ctx, "Unable to read VTS_TMAP_ENT.");
       ifoFree_VTS_TMAPT(ifofile);
       return 0;
     }
 
     for(j = 0; j < vts_tmapt->tmap[i].nr_of_entries; j++)
-      B2N_32(vts_tmapt->tmap[i].map_ent[j]);
+      ReadBuf32(&d.d, &vts_tmapt->tmap[i].map_ent[j]);
+
+    ReleaseDynamicBuffer(&d);
   }
 
   return 1;
@@ -1640,56 +1788,64 @@ static int ifoRead_C_ADT_internal(ifo_handle_t *ifofile,
                                   c_adt_t *c_adt, unsigned int sector) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   size_t i, info_length;
+  fixed_buf_reader r;
 
   if(!DVDFileSeek_(ifop->file, sector * DVD_BLOCK_LEN))
     return 0;
 
-  if(!(DVDReadBytes(ifop->file, c_adt, C_ADT_SIZE)))
+  if(!DVDReadFixedBuffer(ifop->file, &r, C_ADT_SIZE))
     return 0;
 
-  B2N_16(c_adt->nr_of_vobs);
-  B2N_32(c_adt->last_byte);
+  ReadBuf16(&r.r, &c_adt->nr_of_vobs);
+  SkipZeroBuf(&r.r, 2);
+  ReadBuf32(&r.r, &c_adt->last_byte);
 
   if(c_adt->last_byte + 1 < C_ADT_SIZE)
     return 0;
 
   info_length = c_adt->last_byte + 1 - C_ADT_SIZE;
 
-  CHECK_ZERO(c_adt->zero_1);
   /* assert(c_adt->nr_of_vobs > 0);
      Magic Knight Rayearth Daybreak is mastered very strange and has
      Titles with a VOBS that has no cells. */
-  CHECK_VALUE(info_length % sizeof(cell_adr_t) == 0);
+  CHECK_VALUE(info_length % CELL_ADDR_SIZE == 0);
 
-  /* assert(info_length / sizeof(cell_adr_t) >= c_adt->nr_of_vobs);
+  /* assert(info_length / CELL_ADDR_SIZE >= c_adt->nr_of_vobs);
      Enemy of the State region 2 (de) has Titles where nr_of_vobs field
      is to high, they high ones are never referenced though. */
-  if(info_length / sizeof(cell_adr_t) < c_adt->nr_of_vobs) {
+  if(info_length / CELL_ADDR_SIZE < c_adt->nr_of_vobs) {
     Log1(ifop->ctx, "C_ADT nr_of_vobs > available info entries");
-    c_adt->nr_of_vobs = info_length / sizeof(cell_adr_t);
+    c_adt->nr_of_vobs = info_length / CELL_ADDR_SIZE;
   }
 
   c_adt->cell_adr_table = calloc(1, info_length);
   if(!c_adt->cell_adr_table)
     return 0;
 
-  if(info_length &&
-     !(DVDReadBytes(ifop->file, c_adt->cell_adr_table, info_length))) {
-    free(c_adt->cell_adr_table);
-    return 0;
-  }
+  if(info_length)
+  {
+    dynamic_buf_reader d;
 
-  for(i = 0; i < info_length/sizeof(cell_adr_t); i++) {
-    B2N_16(c_adt->cell_adr_table[i].vob_id);
-    B2N_32(c_adt->cell_adr_table[i].start_sector);
-    B2N_32(c_adt->cell_adr_table[i].last_sector);
+    if(!DVDReadDynamicBuffer(ifop->file, &d, info_length)) {
+      free(c_adt->cell_adr_table);
+      return 0;
+    }
 
-    CHECK_ZERO(c_adt->cell_adr_table[i].zero_1);
-    CHECK_VALUE(c_adt->cell_adr_table[i].vob_id > 0);
-    CHECK_VALUE(c_adt->cell_adr_table[i].vob_id <= c_adt->nr_of_vobs);
-    CHECK_VALUE(c_adt->cell_adr_table[i].cell_id > 0);
-    CHECK_VALUE(c_adt->cell_adr_table[i].start_sector <
-                c_adt->cell_adr_table[i].last_sector);
+    for(i = 0; i < info_length/CELL_ADDR_SIZE; i++) {
+      ReadBuf16(&d.d, &c_adt->cell_adr_table[i].vob_id);
+      ReadBuf8(&d.d, &c_adt->cell_adr_table[i].cell_id);
+      SkipZeroBuf(&d.d, 1);
+      ReadBuf32(&d.d, &c_adt->cell_adr_table[i].start_sector);
+      ReadBuf32(&d.d, &c_adt->cell_adr_table[i].last_sector);
+
+      CHECK_VALUE(c_adt->cell_adr_table[i].vob_id > 0);
+      CHECK_VALUE(c_adt->cell_adr_table[i].vob_id <= c_adt->nr_of_vobs);
+      CHECK_VALUE(c_adt->cell_adr_table[i].cell_id > 0);
+      CHECK_VALUE(c_adt->cell_adr_table[i].start_sector <
+                  c_adt->cell_adr_table[i].last_sector);
+    }
+
+    ReleaseDynamicBuffer(&d);
   }
 
   return 1;
@@ -1780,14 +1936,15 @@ static int ifoRead_VOBU_ADMAP_internal(ifo_handle_t *ifofile,
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   unsigned int i;
   int info_length;
+  fixed_buf_reader r;
 
   if(!DVDFileSeekForce_(ifop->file, sector * DVD_BLOCK_LEN, sector))
     return 0;
 
-  if(!(DVDReadBytes(ifop->file, vobu_admap, VOBU_ADMAP_SIZE)))
+  if(!DVDReadFixedBuffer(ifop->file, &r, VOBU_ADMAP_SIZE))
     return 0;
 
-  B2N_32(vobu_admap->last_byte);
+  ReadBuf32(&r.r, &vobu_admap->last_byte);
 
   info_length = vobu_admap->last_byte + 1 - VOBU_ADMAP_SIZE;
   /* assert(info_length > 0);
@@ -1799,15 +1956,20 @@ static int ifoRead_VOBU_ADMAP_internal(ifo_handle_t *ifofile,
   if(!vobu_admap->vobu_start_sectors) {
     return 0;
   }
-  if(info_length &&
-     !(DVDReadBytes(ifop->file,
-                    vobu_admap->vobu_start_sectors, info_length))) {
-    free(vobu_admap->vobu_start_sectors);
-    return 0;
-  }
+  if(info_length)
+  {
+    dynamic_buf_reader d;
 
-  for(i = 0; i < info_length/sizeof(uint32_t); i++)
-    B2N_32(vobu_admap->vobu_start_sectors[i]);
+    if (!(DVDReadDynamicBuffer(ifop->file, &d, info_length))) {
+      free(vobu_admap->vobu_start_sectors);
+      return 0;
+    }
+
+    for(i = 0; i < info_length/sizeof(uint32_t); i++)
+      ReadBuf32(&d.d, &vobu_admap->vobu_start_sectors[i]);
+
+    ReleaseDynamicBuffer(&d);
+  }
 
   return 1;
 }
@@ -1877,18 +2039,19 @@ static int ifoRead_PGCIT_internal(ifo_handle_t *ifofile, pgcit_t *pgcit,
                                   unsigned int offset) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   int i, info_length;
-  uint8_t *data, *ptr;
+  fixed_buf_reader r;
+  dynamic_buf_reader d;
 
   if(!DVDFileSeek_(ifop->file, offset))
     return 0;
 
-  if(!(DVDReadBytes(ifop->file, pgcit, PGCIT_SIZE)))
+  if(!DVDReadFixedBuffer(ifop->file, &r, PGCIT_SIZE))
     return 0;
 
-  B2N_16(pgcit->nr_of_pgci_srp);
-  B2N_32(pgcit->last_byte);
+  ReadBuf16(&r.r, &pgcit->nr_of_pgci_srp);
+  SkipZeroBuf(&r.r, 2);
+  ReadBuf32(&r.r, &pgcit->last_byte);
 
-  CHECK_ZERO(pgcit->zero_1);
   /* assert(pgcit->nr_of_pgci_srp != 0);
      Magic Knight Rayearth Daybreak is mastered very strange and has
      Titles with 0 PTTs. */
@@ -1900,28 +2063,20 @@ static int ifoRead_PGCIT_internal(ifo_handle_t *ifofile, pgcit_t *pgcit,
   }
 
   info_length = pgcit->nr_of_pgci_srp * PGCI_SRP_SIZE;
-  data = calloc(1, info_length);
-  if(!data)
-    return 0;
 
-  if(info_length && !(DVDReadBytes(ifop->file, data, info_length))) {
-    free(data);
+  if(!(DVDReadDynamicBuffer(ifop->file, &d, info_length)))
     return 0;
-  }
 
   pgcit->pgci_srp = calloc(pgcit->nr_of_pgci_srp, sizeof(pgci_srp_t));
   if(!pgcit->pgci_srp) {
-    free(data);
+    ReleaseDynamicBuffer(&d);
     return 0;
   }
-  ptr = data;
   for(i = 0; i < pgcit->nr_of_pgci_srp; i++) {
-    memcpy(&pgcit->pgci_srp[i], ptr, PGCI_SRP_SIZE);
-    ptr += PGCI_SRP_SIZE;
-    read_pgci_srp(&pgcit->pgci_srp[i]);
+    read_pgci_srp(&d.d, &pgcit->pgci_srp[i]);
     CHECK_VALUE(pgcit->pgci_srp[i].zero_1 == 0);
   }
-  free(data);
+  ReleaseDynamicBuffer(&d);
 
   for(i = 0; i < pgcit->nr_of_pgci_srp; i++)
     CHECK_VALUE(pgcit->pgci_srp[i].pgc_start_byte + PGC_SIZE <= pgcit->last_byte+1);
@@ -1998,7 +2153,8 @@ int ifoRead_PGCI_UT(ifo_handle_t *ifofile) {
   unsigned int sector;
   unsigned int i;
   int info_length;
-  uint8_t *data, *ptr;
+  fixed_buf_reader r;
+  dynamic_buf_reader d;
 
   if(!ifofile)
     return 0;
@@ -2025,7 +2181,7 @@ int ifoRead_PGCI_UT(ifo_handle_t *ifofile) {
     return 0;
   }
 
-  if(!(DVDReadBytes(ifop->file, ifofile->pgci_ut, PGCI_UT_SIZE))) {
+  if(!DVDReadFixedBuffer(ifop->file, &r, PGCI_UT_SIZE)) {
     free(ifofile->pgci_ut);
     ifofile->pgci_ut = NULL;
     return 0;
@@ -2033,23 +2189,16 @@ int ifoRead_PGCI_UT(ifo_handle_t *ifofile) {
 
   pgci_ut = ifofile->pgci_ut;
 
-  B2N_16(pgci_ut->nr_of_lus);
-  B2N_32(pgci_ut->last_byte);
+  ReadBuf16(&r.r, &pgci_ut->nr_of_lus);
+  SkipZeroBuf(&r.r, 2);
+  ReadBuf32(&r.r, &pgci_ut->last_byte);
 
-  CHECK_ZERO(pgci_ut->zero_1);
   CHECK_VALUE(pgci_ut->nr_of_lus != 0);
   CHECK_VALUE(pgci_ut->nr_of_lus < 100); /* ?? 3-4 ? */
   CHECK_VALUE((uint32_t)pgci_ut->nr_of_lus * PGCI_LU_SIZE < pgci_ut->last_byte);
 
   info_length = pgci_ut->nr_of_lus * PGCI_LU_SIZE;
-  data = calloc(1, info_length);
-  if(!data) {
-    free(pgci_ut);
-    ifofile->pgci_ut = NULL;
-    return 0;
-  }
-  if(!(DVDReadBytes(ifop->file, data, info_length))) {
-    free(data);
+  if(!DVDReadDynamicBuffer(ifop->file, &d, info_length)) {
     free(pgci_ut);
     ifofile->pgci_ut = NULL;
     return 0;
@@ -2057,19 +2206,18 @@ int ifoRead_PGCI_UT(ifo_handle_t *ifofile) {
 
   pgci_ut->lu = calloc(pgci_ut->nr_of_lus, sizeof(pgci_lu_t));
   if(!pgci_ut->lu) {
-    free(data);
+    ReleaseDynamicBuffer(&d);
     free(pgci_ut);
     ifofile->pgci_ut = NULL;
     return 0;
   }
-  ptr = data;
   for(i = 0; i < pgci_ut->nr_of_lus; i++) {
-    memcpy(&pgci_ut->lu[i], ptr, PGCI_LU_SIZE);
-    ptr += PGCI_LU_SIZE;
-    B2N_16(pgci_ut->lu[i].lang_code);
-    B2N_32(pgci_ut->lu[i].lang_start_byte);
+    ReadBuf16(&d.d, &pgci_ut->lu[i].lang_code);
+    ReadBuf8(&d.d, &pgci_ut->lu[i].lang_extension);
+    ReadBuf8(&d.d, &pgci_ut->lu[i].exists);
+    ReadBuf32(&d.d, &pgci_ut->lu[i].lang_start_byte);
   }
-  free(data);
+  ReleaseDynamicBuffer(&d);
 
   for(i = 0; i < pgci_ut->nr_of_lus; i++) {
     /* Maybe this is only defined for v1.1 and later titles? */
@@ -2144,31 +2292,38 @@ static int ifoRead_VTS_ATTRIBUTES(ifo_handle_t *ifofile,
                                   unsigned int offset) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   unsigned int i;
+  fixed_buf_reader r;
 
   if(!DVDFileSeek_(ifop->file, offset))
     return 0;
 
-  if(!(DVDReadBytes(ifop->file, vts_attributes, sizeof(vts_attributes_t))))
+  if(!DVDReadFixedBuffer(ifop->file, &r, VTS_ATTRIBUTES_SIZE))
     return 0;
 
-  read_video_attr(&vts_attributes->vtsm_vobs_attr);
-  read_video_attr(&vts_attributes->vtstt_vobs_video_attr);
-  read_audio_attr(&vts_attributes->vtsm_audio_attr);
+  ReadBuf32(&r.r, &vts_attributes->last_byte);
+  ReadBuf32(&r.r, &vts_attributes->vts_cat);
+  read_video_attr(&r.r, &vts_attributes->vtsm_vobs_attr);
+  SkipZeroBuf(&r.r, 1);
+  ReadBuf8(&r.r, &vts_attributes->nr_of_vtsm_audio_streams);
+  read_audio_attr(&r.r, &vts_attributes->vtsm_audio_attr);
+  SkipZeroBuf(&r.r, AUDIO_ATTR_SIZE * 7);
+  SkipZeroBuf(&r.r, 16);
+  SkipZeroBuf(&r.r, 1);
+  ReadBuf8(&r.r, &vts_attributes->nr_of_vtsm_subp_streams);
+  read_subp_attr(&r.r, &vts_attributes->vtsm_subp_attr);
+  SkipZeroBuf(&r.r, SUBP_ATTR_SIZE * 27);
+  SkipZeroBuf(&r.r, 2);
+  read_video_attr(&r.r, &vts_attributes->vtstt_vobs_video_attr);
+  SkipZeroBuf(&r.r, 1);
+  ReadBuf8(&r.r, &vts_attributes->nr_of_vtstt_audio_streams);
   for(i=0; i<8; i++)
-    read_audio_attr(&vts_attributes->vtstt_audio_attr[i]);
-  read_subp_attr(&vts_attributes->vtsm_subp_attr);
+    read_audio_attr(&r.r, &vts_attributes->vtstt_audio_attr[i]);
+  SkipZeroBuf(&r.r, 16);
+  SkipZeroBuf(&r.r, 1);
+  ReadBuf8(&r.r, &vts_attributes->nr_of_vtstt_subp_streams);
   for(i=0; i<32; i++)
-    read_subp_attr(&vts_attributes->vtstt_subp_attr[i]);
-  B2N_32(vts_attributes->last_byte);
-  B2N_32(vts_attributes->vts_cat);
+    read_subp_attr(&r.r, &vts_attributes->vtstt_subp_attr[i]);
 
-  CHECK_ZERO(vts_attributes->zero_1);
-  CHECK_ZERO(vts_attributes->zero_2);
-  CHECK_ZERO(vts_attributes->zero_3);
-  CHECK_ZERO(vts_attributes->zero_4);
-  CHECK_ZERO(vts_attributes->zero_5);
-  CHECK_ZERO(vts_attributes->zero_6);
-  CHECK_ZERO(vts_attributes->zero_7);
   CHECK_VALUE(vts_attributes->nr_of_vtsm_audio_streams <= 1);
   CHECK_VALUE(vts_attributes->nr_of_vtsm_subp_streams <= 1);
   CHECK_VALUE(vts_attributes->nr_of_vtstt_audio_streams <= 8);
@@ -2178,7 +2333,7 @@ static int ifoRead_VTS_ATTRIBUTES(ifo_handle_t *ifofile,
   {
     unsigned int nr_coded;
     CHECK_VALUE(vts_attributes->last_byte + 1 >= VTS_ATTRIBUTES_MIN_SIZE);
-    nr_coded = (vts_attributes->last_byte + 1 - VTS_ATTRIBUTES_MIN_SIZE)/6;
+    nr_coded = (vts_attributes->last_byte + 1 - VTS_ATTRIBUTES_MIN_SIZE)/SUBP_ATTR_SIZE;
     /* This is often nr_coded = 70, how do you know how many there really are? */
     if(nr_coded > 32) { /* We haven't read more from disk/file anyway */
       nr_coded = 32;
@@ -2197,7 +2352,8 @@ int ifoRead_VTS_ATRT(ifo_handle_t *ifofile) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   vts_atrt_t *vts_atrt;
   unsigned int i, info_length, sector;
-  uint32_t *data;
+  fixed_buf_reader r;
+  dynamic_buf_reader d;
 
   if(!ifofile)
     return 0;
@@ -2218,56 +2374,57 @@ int ifoRead_VTS_ATRT(ifo_handle_t *ifofile) {
 
   ifofile->vts_atrt = vts_atrt;
 
-  if(!(DVDReadBytes(ifop->file, vts_atrt, VTS_ATRT_SIZE))) {
+  if(!DVDReadFixedBuffer(ifop->file, &r, VTS_ATRT_SIZE)) {
     free(vts_atrt);
     ifofile->vts_atrt = NULL;
     return 0;
   }
 
-  B2N_16(vts_atrt->nr_of_vtss);
-  B2N_32(vts_atrt->last_byte);
+  ReadBuf16(&r.r, &vts_atrt->nr_of_vtss);
+  SkipZeroBuf(&r.r, 2);
+  ReadBuf32(&r.r, &vts_atrt->last_byte);
 
-  CHECK_ZERO(vts_atrt->zero_1);
   CHECK_VALUE(vts_atrt->nr_of_vtss != 0);
   CHECK_VALUE(vts_atrt->nr_of_vtss < 100); /* ?? */
   CHECK_VALUE((uint32_t)vts_atrt->nr_of_vtss * (4 + VTS_ATTRIBUTES_MIN_SIZE) +
               VTS_ATRT_SIZE < vts_atrt->last_byte + 1);
 
   info_length = vts_atrt->nr_of_vtss * sizeof(uint32_t);
-  data = calloc(1, info_length);
-  if(!data) {
+
+  vts_atrt->vts_atrt_offsets = calloc(vts_atrt->nr_of_vtss, sizeof(uint32_t));
+  if(!vts_atrt->vts_atrt_offsets) {
     free(vts_atrt);
     ifofile->vts_atrt = NULL;
     return 0;
   }
 
-  vts_atrt->vts_atrt_offsets = data;
-
-  if(!(DVDReadBytes(ifop->file, data, info_length))) {
-    free(data);
+  if(!DVDReadDynamicBuffer(ifop->file, &d, info_length)) {
+    free(vts_atrt->vts_atrt_offsets);
     free(vts_atrt);
     ifofile->vts_atrt = NULL;
     return 0;
   }
 
   for(i = 0; i < vts_atrt->nr_of_vtss; i++) {
-    B2N_32(data[i]);
-    CHECK_VALUE(data[i] + VTS_ATTRIBUTES_MIN_SIZE < vts_atrt->last_byte + 1);
+    ReadBuf32(&d.d, &vts_atrt->vts_atrt_offsets[i]);
+    CHECK_VALUE(vts_atrt->vts_atrt_offsets[i] + VTS_ATTRIBUTES_MIN_SIZE < vts_atrt->last_byte + 1);
   }
+
+  ReleaseDynamicBuffer(&d);
 
   info_length = vts_atrt->nr_of_vtss * sizeof(vts_attributes_t);
   vts_atrt->vts = calloc(1, info_length);
   if(!vts_atrt->vts) {
-    free(data);
+    free(vts_atrt->vts_atrt_offsets);
     free(vts_atrt);
     ifofile->vts_atrt = NULL;
     return 0;
   }
   for(i = 0; i < vts_atrt->nr_of_vtss; i++) {
-    unsigned int offset = data[i];
+    unsigned int offset = vts_atrt->vts_atrt_offsets[i];
     if(!ifoRead_VTS_ATTRIBUTES(ifofile, &(vts_atrt->vts[i]),
                                (sector * DVD_BLOCK_LEN) + offset)) {
-      free(data);
+      free(vts_atrt->vts_atrt_offsets);
       free(vts_atrt);
       ifofile->vts_atrt = NULL;
       return 0;
@@ -2298,6 +2455,7 @@ void ifoFree_VTS_ATRT(ifo_handle_t *ifofile) {
 int ifoRead_TXTDT_MGI(ifo_handle_t *ifofile) {
   struct ifo_handle_private_s *ifop = PRIV(ifofile);
   txtdt_mgi_t *txtdt_mgi;
+  fixed_buf_reader r;
 
   if(!ifofile)
     return 0;
@@ -2319,12 +2477,17 @@ int ifoRead_TXTDT_MGI(ifo_handle_t *ifofile) {
   }
   ifofile->txtdt_mgi = txtdt_mgi;
 
-  if(!(DVDReadBytes(ifop->file, txtdt_mgi, TXTDT_MGI_SIZE))) {
+  if(!DVDReadFixedBuffer(ifop->file, &r, TXTDT_MGI_SIZE)) {
     Log0(ifop->ctx, "Unable to read TXTDT_MGI.");
     free(txtdt_mgi);
     ifofile->txtdt_mgi = NULL;
     return 0;
   }
+
+  ReadBufData(&r.r, txtdt_mgi->disc_name, 12);
+  ReadBuf16(&r.r, &txtdt_mgi->unknown1);
+  ReadBuf16(&r.r, &txtdt_mgi->nr_of_language_units);
+  ReadBuf32(&r.r, &txtdt_mgi->last_byte);
 
   /* Log1(ifop->ctx, "-- Not done yet --\n"); */
   return 1;
