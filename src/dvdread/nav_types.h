@@ -151,7 +151,7 @@ typedef struct {
   pci_gi_t    pci_gi;
   nsml_agli_t nsml_agli;
   hli_t       hli;
-  uint8_t     zero1[189];
+  /* uint8_t     zero1[189]; */
 } pci_t;
 
 
@@ -237,7 +237,7 @@ typedef struct {
   sml_agli_t sml_agli;
   vobu_sri_t vobu_sri;
   synci_t    synci;
-  uint8_t    zero1[471];
+  /* uint8_t    zero1[471]; */
 } dsi_t;
 
 
