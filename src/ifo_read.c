@@ -34,6 +34,18 @@
 #include "dvdread_internal.h"
 #include "dvdread/bitreader.h"
 
+#ifdef HAVE_STATIC_ASSERT
+#include <assert.h>
+#elif defined(_MSC_VER)
+#include <crtdbg.h>
+#define static_assert(x, y)  _STATIC_ASSERT(x)
+#else
+#define static_assert(x, y) // packed size checks not supported by this compiler
+#endif
+
+#define POINTER_SIZE  sizeof(void*)
+
+
 #ifndef DVD_BLOCK_LEN
 #define DVD_BLOCK_LEN 2048
 #endif
@@ -115,6 +127,43 @@ static inline int DVDFileSeekForce_( dvd_file_t *dvd_file, uint32_t offset, int 
 static inline int DVDFileSeek_( dvd_file_t *dvd_file, uint32_t offset ) {
   return (DVDFileSeek(dvd_file, (int)offset) == (int)offset);
 }
+
+/* size checks on packed structures */
+static_assert(sizeof(dvd_time_t)         == DVD_TIME_SIZE,                             "invalid dvd_time_t size");
+static_assert(sizeof(vm_cmd_t)           == COMMAND_DATA_SIZE,                         "invalid vm_cmd_t size");
+static_assert(sizeof(video_attr_t)       == VIDEO_ATTR_SIZE,                           "invalid video_attr_t size");
+static_assert(sizeof(audio_attr_t)       == AUDIO_ATTR_SIZE,                           "invalid audio_attr_t size");
+static_assert(sizeof(multichannel_ext_t) == MULTICHANNEL_EXT_SIZE,                     "invalid multichannel_ext_t size");
+static_assert(sizeof(subp_attr_t)        == SUBP_ATTR_SIZE,                            "invalid subp_attr_t size");
+static_assert(sizeof(pgc_command_tbl_t)  == PGC_COMMAND_TBL_SIZE     + 3*POINTER_SIZE, "invalid pgc_command_tbl_t size");
+static_assert(sizeof(cell_playback_t)    == CELL_PLAYBACK_SIZE,                        "invalid cell_playback_t size");
+static_assert(sizeof(cell_position_t)    == CELL_POSITION_SIZE,                        "invalid cell_position_t size");
+static_assert(sizeof(user_ops_t)         == USER_OPS_SIZE,                             "invalid user_ops_t size");
+static_assert(sizeof(pgc_t)              == PGC_SIZE + sizeof(int)   + 4*POINTER_SIZE, "invalid pgc_t size");
+static_assert(sizeof(pgci_srp_t)         == PGCI_SRP_SIZE            + 1*POINTER_SIZE, "invalid pgci_srp_t size");
+static_assert(sizeof(pgcit_t)            == PGCIT_SIZE + sizeof(int) + 1*POINTER_SIZE, "invalid pgcit_t size");
+static_assert(sizeof(pgci_lu_t)          == PGCI_LU_SIZE             + 1*POINTER_SIZE, "invalid pgci_lu_t size");
+static_assert(sizeof(pgci_ut_t)          == PGCI_UT_SIZE             + 1*POINTER_SIZE, "invalid pgci_ut_t size");
+static_assert(sizeof(cell_adr_t)         == CELL_ADDR_SIZE,                            "invalid cell_adr_t size");
+static_assert(sizeof(c_adt_t)            == C_ADT_SIZE               + 1*POINTER_SIZE, "invalid c_adt_t size");
+static_assert(sizeof(vobu_admap_t)       == VOBU_ADMAP_SIZE          + 1*POINTER_SIZE, "invalid vobu_admap_t size");
+static_assert(sizeof(vmgi_mat_t)         == VMGI_MAT_SIZE,                             "invalid vmgi_mat_t size");
+static_assert(sizeof(playback_type_t)    == PLAYBACK_TYPE_SIZE,                        "invalid playback_type_t size");
+static_assert(sizeof(title_info_t)       == TITLE_INFO_SIZE,                           "invalid title_info_t size");
+static_assert(sizeof(tt_srpt_t)          == TT_SRPT_SIZE             + 1*POINTER_SIZE, "invalid tt_srpt_t size");
+static_assert(sizeof(ptl_mait_country_t) == PTL_MAIT_COUNTRY_SIZE    + 1*POINTER_SIZE, "invalid ptl_mait_country_t size");
+static_assert(sizeof(ptl_mait_t)         == PTL_MAIT_SIZE            + 1*POINTER_SIZE, "invalid ptl_mait_t size");
+static_assert(sizeof(vts_attributes_t)   == VTS_ATTRIBUTES_SIZE,                       "invalid vts_attributes_t size");
+static_assert(sizeof(vts_atrt_t)         == VTS_ATRT_SIZE            + 2*POINTER_SIZE, "invalid vts_atrt_t size");
+static_assert(sizeof(txtdt_t)            == TXTDT_SIZE,                                "invalid txtdt_t size");
+static_assert(sizeof(txtdt_lu_t)         == TXTDT_LU_SIZE            + 1*POINTER_SIZE, "invalid txtdt_lu_t size");
+static_assert(sizeof(txtdt_mgi_t)        == TXTDT_MGI_SIZE           + 1*POINTER_SIZE, "invalid txtdt_mgi_t size");
+static_assert(sizeof(vtsi_mat_t)         == VTSI_MAT_SIZE,                             "invalid vtsi_mat_t size");
+static_assert(sizeof(ptt_info_t)         == PTT_INFO_SIZE,                             "invalid ptt_info_t size");
+static_assert(sizeof(ttu_t)              == TTU_SIZE                 + 1*POINTER_SIZE, "invalid ttu_t size");
+static_assert(sizeof(vts_ptt_srpt_t)     == VTS_PTT_SRPT_SIZE        + 2*POINTER_SIZE, "invalid vts_ptt_srpt_t size");
+static_assert(sizeof(vts_tmap_t)         == VTS_TMAP_SIZE            + 1*POINTER_SIZE, "invalid vts_tmap_t size");
+static_assert(sizeof(vts_tmapt_t)        == VTS_TMAPT_SIZE           + 2*POINTER_SIZE, "invalid vts_tmapt_t size");
 
 static void read_video_attr(video_attr_t *va) {
   getbits_state_t state;
