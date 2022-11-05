@@ -54,14 +54,14 @@ typedef struct {
   uint32_t vobu_se_e_ptm;   /**< end ptm of sequence end in vobu */
   dvd_time_t e_eltm;        /**< Cell elapsed time */
   char vobu_isrc[32];
-} ATTRIBUTE_PACKED pci_gi_t;
+} pci_gi_t;
 
 /**
  * Non Seamless Angle Information
  */
 typedef struct {
   uint32_t nsml_agl_dsta[9];  /**< address of destination vobu in AGL_C#n */
-} ATTRIBUTE_PACKED nsml_agli_t;
+} nsml_agli_t;
 
 /**
  * Highlight General Information
@@ -91,7 +91,7 @@ typedef struct {
   uint8_t zero5;       /**< reserved */
   uint8_t fosl_btnn;   /**< forcedly selected button  (low 6 bits) */
   uint8_t foac_btnn;   /**< forcedly activated button (low 6 bits) */
-} ATTRIBUTE_PACKED hl_gi_t;
+} hl_gi_t;
 
 
 /**
@@ -104,7 +104,7 @@ typedef struct {
  */
 typedef struct {
   uint32_t btn_coli[3][2];  /**< [button color number-1][select:0/action:1] */
-} ATTRIBUTE_PACKED btn_colit_t;
+} btn_colit_t;
 
 /**
  * Button Information
@@ -133,7 +133,7 @@ typedef struct {
   unsigned int zero6            : 2;  /**< reserved */
   unsigned int right            : 6;  /**< button index when pressing right */
   vm_cmd_t cmd;
-} ATTRIBUTE_PACKED btni_t;
+} btni_t;
 
 /**
  * Highlight Information
@@ -142,7 +142,7 @@ typedef struct {
   hl_gi_t     hl_gi;
   btn_colit_t btn_colit;
   btni_t      btnit[36];
-} ATTRIBUTE_PACKED hli_t;
+} hli_t;
 
 /**
  * PCI packet
@@ -151,8 +151,8 @@ typedef struct {
   pci_gi_t    pci_gi;
   nsml_agli_t nsml_agli;
   hli_t       hli;
-  uint8_t     zero1[189];
-} ATTRIBUTE_PACKED pci_t;
+  /* uint8_t     zero1[189]; */
+} pci_t;
 
 
 
@@ -171,7 +171,7 @@ typedef struct {
   uint8_t  zero1;           /**< reserved */
   uint8_t  vobu_c_idn;      /**< Cell Id number that this VOBU is part of */
   dvd_time_t c_eltm;        /**< Cell elapsed time */
-} ATTRIBUTE_PACKED dsi_gi_t;
+} dsi_gi_t;
 
 /**
  * Seamless Playback Information
@@ -189,7 +189,7 @@ typedef struct {
     uint32_t gap_len1;
     uint32_t gap_len2;
   } vob_a[8];
-} ATTRIBUTE_PACKED sml_pbi_t;
+} sml_pbi_t;
 
 /**
  * Seamless Angle Information for one angle
@@ -197,14 +197,14 @@ typedef struct {
 typedef struct {
   uint32_t address; /**< offset to next ILVU, high bit is before/after */
   uint16_t size;    /**< byte size of the ILVU pointed to by address */
-} ATTRIBUTE_PACKED sml_agl_data_t;
+} sml_agl_data_t;
 
 /**
  * Seamless Angle Information
  */
 typedef struct {
   sml_agl_data_t data[9];
-} ATTRIBUTE_PACKED sml_agli_t;
+} sml_agli_t;
 
 /**
  * VOBU Search Information
@@ -216,7 +216,7 @@ typedef struct {
   uint32_t prev_vobu;
   uint32_t bwda[19];   /**< Backwards, time */
   uint32_t prev_video;
-} ATTRIBUTE_PACKED vobu_sri_t;
+} vobu_sri_t;
 
 #define SRI_END_OF_CELL 0x3fffffff
 
@@ -226,7 +226,7 @@ typedef struct {
 typedef struct {
   uint16_t a_synca[8];   /**< offset to first audio packet for this VOBU */
   uint32_t sp_synca[32]; /**< offset to first subpicture packet */
-} ATTRIBUTE_PACKED synci_t;
+} synci_t;
 
 /**
  * DSI packet
@@ -237,8 +237,8 @@ typedef struct {
   sml_agli_t sml_agli;
   vobu_sri_t vobu_sri;
   synci_t    synci;
-  uint8_t    zero1[471];
-} ATTRIBUTE_PACKED dsi_t;
+  /* uint8_t    zero1[471]; */
+} dsi_t;
 
 
 #if PRAGMA_PACK
