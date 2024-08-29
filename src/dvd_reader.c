@@ -31,7 +31,9 @@
 #include <string.h>         /* memcpy, strlen */
 #include <unistd.h>         /* pclose */
 #include <limits.h>         /* PATH_MAX */
+#if HAVE_DIRENT_H
 #include <dirent.h>         /* opendir, readdir */
+#endif
 #include <ctype.h>          /* isalpha */
 
 #if defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__bsdi__) || defined(__APPLE__)
