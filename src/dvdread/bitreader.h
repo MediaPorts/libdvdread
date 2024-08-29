@@ -21,6 +21,8 @@
 #ifndef LIBDVDREAD_BITREADER_H
 #define LIBDVDREAD_BITREADER_H
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif

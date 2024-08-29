@@ -23,6 +23,7 @@
 #define LIBDVDREAD_IFO_TYPES_H
 
 #include <inttypes.h>
+#include <stdint.h>
 #include "dvdread/dvd_reader.h"
 
 

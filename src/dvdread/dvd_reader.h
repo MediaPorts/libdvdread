@@ -33,6 +33,7 @@
 #include <sys/types.h>
 #include <inttypes.h>
 #include <stdarg.h>
+#include <stdint.h>
 
 /**
  * The DVD access interface.

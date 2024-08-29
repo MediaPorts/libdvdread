@@ -61,6 +61,7 @@
 #if defined(_WIN32)
 # include <windows.h>
 # include "msvc/contrib/win32_cs.h"
+# include <WinSock2.h>
 #endif
 
 /* misc win32 helpers */
